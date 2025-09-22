@@ -48,7 +48,7 @@ Smart Pantry helps households reduce food waste and save money by managing pantr
 ## Technology Stack
 
 - **Backend Development:** FastAPI with MySQL for database and server logic  
-- **Frontend Development:** Swagger-based interface for mobile and web users  
+- **Frontend Development:** Next.js interface for mobile and web users  
 - **Computer Vision:** OpenCV + Tesseract for barcode/label recognition  
 - **APIs & Integrations:** Barcode lookup, Spoonacular (recipes), OAuth authentication, and map services  
 - **Testing & Deployment:** Feature testing, UI/UX refinement, deployed prototype with Vercel  
