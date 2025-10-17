@@ -1,103 +1,109 @@
-import Image from "next/image";
+// app/page.tsx
+import Link from "next/link";
 
-export default function Home() {
+export default function MarketingHome() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="relative min-h-screen">
+      {/* FULL-PAGE BACKGROUND (fixed) */}
+      <div
+        className="fixed inset-0 z-0 bg-no-repeat bg-cover bg-center pointer-events-none"
+        style={{
+          backgroundImage:
+            "url('https://images.pexels.com/photos/1508666/pexels-photo-1508666.jpeg?auto=compress&cs=tinysrgb&w=1920&h=1080&dpr=1')",
+          backgroundAttachment: "fixed",
+        }}
+      />
+      {/* Contrast overlay */}
+      <div className="fixed inset-0 z-0 bg-black/45 pointer-events-none" />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+      {/* CONTENT ABOVE BACKGROUND */}
+      <div className="relative z-10">
+        {/* HERO — shorter height + content near top */}
+        <section className="min-h-[55vh] flex flex-col items-center justify-start text-center px-4 text-white pt-28 md:pt-32">
+          <div>
+            <h1 className="text-5xl md:text-7xl font-extrabold mb-4 drop-shadow-[0_6px_16px_rgba(0,0,0,0.45)]">
+              Smart Pantry
+            </h1>
+            <p className="text-lg md:text-xl mb-8 opacity-95">
+              Welcome to food and waste management re-invented.
+            </p>
+            <div className="flex justify-center gap-4">
+              <Link
+                href="/login"
+                className="px-6 py-3 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium transition"
+              >
+                Login
+              </Link>
+              <Link
+                href="/signup"
+                className="px-6 py-3 rounded-lg bg-white text-green-700 font-medium hover:bg-green-100 transition"
+              >
+                Sign Up
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* ABOUT — pulled slightly upward */}
+        <section className="max-w-5xl mx-auto px-4 pt-4 pb-12 -mt-8 md:-mt-12">
+          <h2 className="text-3xl font-semibold text-center text-white drop-shadow mb-6">
+            About Us
+          </h2>
+          <div className="mx-auto max-w-3xl bg-white/85 backdrop-blur-md shadow-soft rounded-2xl p-6 text-slate-800">
+            Smart Pantry makes everyday food management simpler, smarter, and
+            more sustainable. Reduce waste, save money, and enjoy fresher meals —
+            powered by barcode scanning, freshness predictions, and recipe
+            recommendations.
+          </div>
+        </section>
+
+        {/* WHAT WE OFFER */}
+        <section className="max-w-6xl mx-auto px-4 pb-24 -mt-4">
+          <h2 className="text-3xl font-semibold text-center text-white drop-shadow mb-8">
+            What We Offer
+          </h2>
+          <div className="grid gap-6 md:grid-cols-3">
+            <div className="bg-white/90 backdrop-blur-md rounded-2xl p-6 shadow-soft">
+              <h3 className="font-semibold mb-2">✨ Smart Scanning</h3>
+              <p className="text-slate-600 text-sm">
+                Add groceries with barcode scanning or receipt OCR — auto-detect
+                product, category, and quantity.
+              </p>
+            </div>
+            <div className="bg-white/90 backdrop-blur-md rounded-2xl p-6 shadow-soft">
+              <h3 className="font-semibold mb-2">🥬 Freshness Alerts</h3>
+              <p className="text-slate-600 text-sm">
+                Timely reminders before items expire — shelf-life estimates by
+                item type and purchase date.
+              </p>
+            </div>
+            <div className="bg-white/90 backdrop-blur-md rounded-2xl p-6 shadow-soft">
+              <h3 className="font-semibold mb-2">🧑‍🍳 Recipe Magic</h3>
+              <p className="text-slate-600 text-sm">
+                Personalized suggestions using what you already have; filter by
+                preferences and diet.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* CTA */}
+        <section className="max-w-4xl mx-auto px-4 pb-24 text-center">
+          <div className="bg-white/85 backdrop-blur-md rounded-2xl shadow-soft p-8 text-slate-900">
+            <h3 className="text-2xl font-semibold mb-2">Join the Community</h3>
+            <p className="text-slate-600 mb-4">
+              Create a free account to access your Pantry, Recipes, and Shopping
+              List.
+            </p>
+            <Link
+              href="/signup"
+              className="px-6 py-3 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition"
+            >
+              Sign Up
+            </Link>
+          </div>
+        </section>
+      </div>
+    </main>
   );
 }

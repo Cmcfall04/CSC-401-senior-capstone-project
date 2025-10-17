@@ -1,0 +1,20 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="none"
+>
+  <!-- basket body -->
+  <path
+    d="M4 9h16l-1.5 9a2 2 0 0 1-2 1.8H7.5a2 2 0 0 1-2-1.8L4 9z"
+    fill="#4CAF50"
+  />
+  <!-- handle -->
+  <path
+    d="M8 9a4 4 0 0 1 8 0"
+    fill="none"
+    stroke="#4CAF50"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+</svg>
