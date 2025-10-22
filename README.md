@@ -2,6 +2,7 @@
 
 **CSC-401 Senior Capstone Project**  
 **Team Name:** Pantry Guardians  
+**Trello Borard:** https://trello.com/b/jgs7YbLN/smartpantry-capstone-project
 
 An AI-powered application designed to reduce household food waste by helping users track items, predict freshness, and discover recipes based on available ingredients.
 
