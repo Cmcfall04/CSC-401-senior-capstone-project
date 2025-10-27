@@ -58,7 +58,7 @@ export default function DashboardHome() {
     <div className="max-w-6xl mx-auto px-4 py-8 grid gap-8">
       <header className="text-center grid gap-3">
         <div className="mx-auto">
-          <img src="/logo.svg" width={56} height={56} alt="SmartPantry" />
+          <img src="/Green_Basket_Icon.png" width={56} height={56} alt="SmartPantry" />
         </div>
         <h1 className="text-3xl font-semibold">SmartPantry</h1>
         <p className="text-slate-600">Welcome back! Here’s a quick look at your pantry.</p>

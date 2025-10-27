@@ -5,6 +5,9 @@ import Navbar from "@/components/Navbar";
 export const metadata = {
   title: "SmartPantry",
   description: "Track what you have. Waste less. Save more.",
+  icons: {
+    icon: "/Green_Basket_Icon.png",
+  },
 };
 
 export default function RootLayout({
