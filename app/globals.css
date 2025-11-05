@@ -1,3 +1,4 @@
+/* app/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -14,6 +15,7 @@ body {
   background: var(--bg);
 }
 
+/* Reusable card style */
 .card {
   @apply bg-white shadow-soft rounded-2xl p-6;
 }
