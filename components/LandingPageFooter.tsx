@@ -5,10 +5,10 @@ export default function LandingPageFooter() {
     <section 
       className="relative min-h-[50vh] flex flex-col items-center justify-center text-white bg-cover bg-center"
       style={{
-        backgroundImage: "url('/Landing_page_footer.png')",
-        imageRendering: 'crisp-edges',
-        backgroundSize: 'cover',
+        backgroundImage: "url('/Landing_Page_footer.webp')",
+        backgroundSize: '100%',
         backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
       }}
     >
       {/* Contrast overlay */}
