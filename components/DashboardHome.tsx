@@ -42,56 +42,56 @@ export default function DashboardHome() {
     .slice(0, 5);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 grid gap-8">
-      <header className="text-center grid gap-3">
+    <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8 grid gap-4 sm:gap-8">
+      <header className="text-center grid gap-2 sm:gap-3">
         <div className="mx-auto">
-          <Image src="/Green_Basket_Icon.png" width={56} height={56} alt="SmartPantry" />
+          <Image src="/Green_Basket_Icon.png" width={48} height={48} alt="SmartPantry" className="w-12 h-12 sm:w-14 sm:h-14" />
         </div>
-        <h1 className="text-3xl font-semibold">SmartPantry</h1>
-        <p className="text-slate-600">Welcome back! Here’s a quick look at your pantry.</p>
+        <h1 className="text-xl sm:text-3xl font-semibold">SmartPantry</h1>
+        <p className="text-xs sm:text-base text-slate-600 px-2">Welcome back! Here's a quick look at your pantry.</p>
       </header>
 
-      <section className="grid gap-4 md:grid-cols-3">
-        <div className="card">
-          <h3 className="font-semibold mb-2">Expiring Soon</h3>
-          <ul className="text-slate-700 text-sm space-y-1">
+      <section className="grid gap-3 sm:gap-4 md:grid-cols-3">
+        <div className="card p-4 sm:p-6">
+          <h3 className="font-semibold mb-2 text-sm sm:text-base">Expiring Soon</h3>
+          <ul className="text-slate-700 text-xs sm:text-sm space-y-1">
             {expiringSoon.map(i => (
               <li key={i.id} className="flex items-center justify-between">
-                <span>{i.name}</span>
-                <span className="text-slate-400">{i.expiresInDays! >= 0 ? `${i.expiresInDays}d` : "expired"}</span>
+                <span className="truncate pr-2">{i.name}</span>
+                <span className="text-slate-400 flex-shrink-0">{i.expiresInDays! >= 0 ? `${i.expiresInDays}d` : "expired"}</span>
               </li>
             ))}
             {expiringSoon.length === 0 && <li className="text-slate-400">Nothing expiring soon 🎉</li>}
           </ul>
         </div>
 
-        <div className="card">
-          <h3 className="font-semibold mb-2">Recently Added</h3>
-          <ul className="text-slate-700 text-sm space-y-1">
+        <div className="card p-4 sm:p-6">
+          <h3 className="font-semibold mb-2 text-sm sm:text-base">Recently Added</h3>
+          <ul className="text-slate-700 text-xs sm:text-sm space-y-1">
             {recentlyAdded.map(i => (
               <li key={i.id} className="flex items-center justify-between">
-                <span>{i.name}</span>
-                <span className="text-slate-400">{new Date(i.addedAt).toLocaleDateString()}</span>
+                <span className="truncate pr-2">{i.name}</span>
+                <span className="text-slate-400 flex-shrink-0 text-xs">{new Date(i.addedAt).toLocaleDateString()}</span>
               </li>
             ))}
           </ul>
         </div>
 
-        <div className="card">
-          <h3 className="font-semibold mb-2">Waste Saved</h3>
-          <p className="text-slate-600 text-sm">TBD — we’ll wire this to your tracking in Sprint 2.</p>
+        <div className="card p-4 sm:p-6">
+          <h3 className="font-semibold mb-2 text-sm sm:text-base">Waste Saved</h3>
+          <p className="text-slate-600 text-xs sm:text-sm">TBD — we'll wire this to your tracking in Sprint 2.</p>
         </div>
       </section>
 
-      <section className="card">
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+      <section className="card p-4 sm:p-6">
+        <div className="flex flex-col gap-3 sm:gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-2">
+            <div className="flex items-center gap-2 flex-1">
               <input
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Search"
-                className="border rounded-full px-3 py-1.5 text-sm"
+                className="border rounded-full px-3 py-1.5 text-base sm:text-sm flex-1 min-w-0"
               />
               <div className="hidden md:flex items-center gap-2">
                 <Pill color="#22c55e">Fresh</Pill>
@@ -99,12 +99,12 @@ export default function DashboardHome() {
                 <Pill color="#ef4444">Expired</Pill>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-slate-600">Sort</label>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <label className="text-xs sm:text-sm text-slate-600">Sort</label>
               <select
                 value={sort}
                 onChange={e => setSort(e.target.value as "added" | "expires")}
-                className="border rounded-lg px-2 py-1 text-sm bg-white"
+                className="border rounded-lg px-2 py-1 text-base sm:text-sm bg-white"
               >
                 <option value="added">Recently Added</option>
                 <option value="expires">Expires (Soonest First)</option>
@@ -112,21 +112,21 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          <div className="divide-y">
+          <div className="divide-y max-h-[40vh] sm:max-h-none overflow-y-auto">
             {filtered.map(i => (
-              <div key={i.id} className="py-3 flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div key={i.id} className="py-2 sm:py-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                   <span
-                    className="inline-block w-2.5 h-2.5 rounded-full"
+                    className="inline-block w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full flex-shrink-0"
                     style={{
                       backgroundColor:
                         i.status === "fresh" ? "#22c55e" :
                         i.status === "expiring" ? "#fbbf24" : "#ef4444",
                     }}
                   />
-                  <span className="font-medium">{i.name}</span>
+                  <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
                 </div>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-500 flex-shrink-0">
                   {i.status === "expired"
                     ? "expired"
                     : typeof i.expiresInDays === "number"
@@ -137,11 +137,11 @@ export default function DashboardHome() {
             ))}
           </div>
 
-          <div className="pt-2 flex items-center justify-between">
-            <Link href={"/pantry" as Route} className="text-sm text-slate-600 hover:underline">
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0">
+            <Link href={"/pantry" as Route} className="text-xs sm:text-sm text-slate-600 hover:underline text-center sm:text-left">
               View full pantry →
             </Link>
-            <Link href={"/pantry" as Route} className="px-4 py-2 rounded-full bg-green-600 text-white text-sm">
+            <Link href={"/pantry" as Route} className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center">
               Add Item to Pantry
             </Link>
           </div>
