@@ -48,7 +48,7 @@ export default function DashboardHome() {
           <Image src="/Green_Basket_Icon.png" width={48} height={48} alt="SmartPantry" className="w-12 h-12 sm:w-14 sm:h-14" />
         </div>
         <h1 className="text-xl sm:text-3xl font-semibold">SmartPantry</h1>
-        <p className="text-xs sm:text-base text-slate-600 px-2">Welcome back! Here's a quick look at your pantry.</p>
+        <p className="text-xs sm:text-base text-slate-600 px-2">Welcome back! Here&apos;s a quick look at your pantry.</p>
       </header>
 
       <section className="grid gap-3 sm:gap-4 md:grid-cols-3">
@@ -79,7 +79,7 @@ export default function DashboardHome() {
 
         <div className="card p-4 sm:p-6">
           <h3 className="font-semibold mb-2 text-sm sm:text-base">Waste Saved</h3>
-          <p className="text-slate-600 text-xs sm:text-sm">TBD — we'll wire this to your tracking in Sprint 2.</p>
+          <p className="text-slate-600 text-xs sm:text-sm">TBD — we&apos;ll wire this to your tracking in Sprint 2.</p>
         </div>
       </section>
 
