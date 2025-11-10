@@ -1,28 +1,10 @@
 // components/Dashboard.tsx
 "use client";
 
-import { useEffect } from "react";
-
 export default function Dashboard() {
-  useEffect(() => {
-    // Only disable scrolling on desktop, allow scrolling on mobile
-    const isMobile = window.innerWidth < 768;
-    
-    if (!isMobile) {
-      document.body.style.overflow = 'hidden';
-      document.documentElement.style.overflow = 'hidden';
-    }
-    
-    // Re-enable scrolling when component unmounts
-    return () => {
-      document.body.style.overflow = 'unset';
-      document.documentElement.style.overflow = 'unset';
-    };
-  }, []);
-
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center py-8 md:h-screen md:overflow-hidden md:py-8">
-      <div className="w-full max-w-7xl mx-auto px-4 md:px-6 overflow-y-auto md:overflow-y-visible max-h-[calc(100vh-4rem)] md:max-h-none pb-8 md:pb-0">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center py-8 overflow-x-hidden">
+      <div className="w-full max-w-7xl mx-auto px-4 md:px-6 pb-8">
         {/* Header */}
         <header className="text-center mb-6 md:mb-8">
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-slate-800 mb-2">
@@ -82,7 +64,7 @@ export default function Dashboard() {
           <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-center text-slate-800 mb-4 md:mb-6">
             Smart Pantry Tips
           </h2>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-4 md:pb-0">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-4">
             {/* Tip 1 */}
             <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-5 hover:shadow-xl transition-shadow">
               <div className="w-10 h-10 mb-3 bg-green-100 rounded-full flex items-center justify-center">
@@ -166,4 +148,3 @@ export default function Dashboard() {
     </main>
   );
 }
-
