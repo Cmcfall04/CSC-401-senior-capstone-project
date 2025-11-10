@@ -1,0 +1,50 @@
+name: smart-pantry-dev
+
+services:
+  db:
+    image: postgres:16
+    container_name: sp-db
+    restart: always
+    environment:
+      POSTGRES_USER: pantry
+      POSTGRES_PASSWORD: pantry
+      POSTGRES_DB: smart_pantry     # avoid hyphens in DB name
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # named volume for data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "pantry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./api                         # keep Dockerfile inside ./api
+    container_name: sp-api
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - ./api/.env                       # make sure this file exists
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"                      # map host 8000 -> container 8000
+    volumes:
+      - ./api/src:/app/src               # live-reload your code
+
+  frontend:
+    build: .
+    container_name: sp-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  pgdata:
