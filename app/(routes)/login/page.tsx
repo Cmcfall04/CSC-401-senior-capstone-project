@@ -35,7 +35,7 @@ export default function LoginPage() {
       document.cookie = `sp_session=dev; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
       // Send them to the dashboard
       router.replace("/dashboard");
-    } catch (e) {
+    } catch {
       setErr("Login failed. Please try again.");
     } finally {
       setLoading(false);
@@ -112,7 +112,7 @@ export default function LoginPage() {
 
         {/* Sign Up Link */}
         <p className="text-center text-gray-600 mt-3">
-          Don't have an account?{" "}
+          Don&apos;t have an account?{" "}
           <Link href="/signup" className="text-green-600 hover:text-green-700 font-medium">
             Sign up
           </Link>

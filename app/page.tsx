@@ -77,7 +77,7 @@ function MarketingHome() {
           className="mx-auto max-w-3xl shadow-lg rounded-2xl p-8 text-slate-700 text-center"
           style={{ backgroundColor: 'rgba(39, 174, 96, 0.1)' }}
         >
-          Smart Pantry is designed to make everyday food management simpler, smarter, and more sustainable. Our mission is to help households reduce food waste, save money, and enjoy fresher meals by combining technology with practical kitchen habits. With barcode scanning, AI-driven freshness predictions, and recipe recommendations, Smart Pantry keeps you connected to what's in your kitchen without the guesswork.
+          Smart Pantry is designed to make everyday food management simpler, smarter, and more sustainable. Our mission is to help households reduce food waste, save money, and enjoy fresher meals by combining technology with practical kitchen habits. With barcode scanning, AI-driven freshness predictions, and recipe recommendations, Smart Pantry keeps you connected to what&apos;s in your kitchen without the guesswork.
         </div>
       </section>
 
@@ -125,7 +125,7 @@ function MarketingHome() {
             <div className="bg-white rounded-2xl p-6 shadow-lg w-full h-full flex flex-col">
               <h3 className="font-semibold mb-3 text-xl">🥬 Freshness Alerts</h3>
               <p className="text-slate-600 text-base flex-grow">
-                Stay one step ahead of food waste with timely reminders before items expire. Our freshness tracker predicts shelf life based on item type and purchase date, then alerts you so you can use ingredients while they're still at their best.
+                Stay one step ahead of food waste with timely reminders before items expire. Our freshness tracker predicts shelf life based on item type and purchase date, then alerts you so you can use ingredients while they&apos;re still at their best.
               </p>
             </div>
             <Image 
@@ -142,7 +142,7 @@ function MarketingHome() {
             <div className="bg-white rounded-2xl p-6 shadow-lg w-full h-full flex flex-col">
               <h3 className="font-semibold mb-3 text-xl">🧑‍🍳 Recipe Magic</h3>
               <p className="text-slate-600 text-base flex-grow">
-                Turn what's in your kitchen into delicious meals with personalized recipe suggestions. Filter by dietary needs or preferences, and discover creative ways to combine ingredients you already have, reducing waste and making cooking easier.
+                Turn what&apos;s in your kitchen into delicious meals with personalized recipe suggestions. Filter by dietary needs or preferences, and discover creative ways to combine ingredients you already have, reducing waste and making cooking easier.
               </p>
             </div>
             <Image 
