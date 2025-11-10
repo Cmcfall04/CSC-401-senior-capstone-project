@@ -31,12 +31,22 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Mock "auth": set a cookie for 30 days
-      document.cookie = `sp_session=dev; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
-      // Send them to the dashboard
+      const res = await fetch("http://localhost:8000/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pw }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Login failed");
+      }
+      
+      const data = await res.json();
+      document.cookie = `sp_session=${data.token}; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
       router.replace("/dashboard");
-    } catch {
-      setErr("Login failed. Please try again.");
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Login failed. Please try again.");
     } finally {
       setLoading(false);
     }

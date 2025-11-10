@@ -47,12 +47,22 @@ export default function SignupPage() {
     }
 
     try {
-      // Mock "create account": set the session cookie
-      document.cookie = `sp_session=dev; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
-      // Send them to the dashboard
-      router.replace("/");
-    } catch {
-      setErr("Sign up failed. Please try again.");
+      const res = await fetch("http://localhost:8000/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `${firstName} ${lastName}`, email, password: pw }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Sign up failed");
+      }
+      
+      const data = await res.json();
+      document.cookie = `sp_session=${data.token}; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
+      router.replace("/dashboard");
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Sign up failed. Please try again.");
     } finally {
       setLoading(false);
     }
