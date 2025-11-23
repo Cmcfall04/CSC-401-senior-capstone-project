@@ -4,12 +4,11 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { Route } from "next";
-import { useMemo, useState } from "react";
-import { pantryItems, type PantryItem } from "@/data/pantry-items";
+import { useMemo, useState, useEffect } from "react";
+import { type PantryItem } from "@/data/pantry-items";
+import { getItems, backendItemToFrontend } from "@/lib/api";
 
 type Item = PantryItem;
-
-const DEMO_ITEMS: Item[] = pantryItems;
 
 function Pill({ color, children }: { color: string; children: React.ReactNode }) {
   return (
@@ -23,20 +22,43 @@ function Pill({ color, children }: { color: string; children: React.ReactNode })
 export default function DashboardHome() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"added" | "expires">("added");
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch items from API
+  useEffect(() => {
+    async function fetchItems() {
+      try {
+        setLoading(true);
+        setError(null);
+        const backendItems = await getItems();
+        const frontendItems = backendItems.map(backendItemToFrontend);
+        setItems(frontendItems);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load items");
+        console.error("Error fetching items:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchItems();
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = DEMO_ITEMS.filter(i => !q || i.name.toLowerCase().includes(q));
+    const list = items.filter(i => !q || i.name.toLowerCase().includes(q));
     if (sort === "added") return list.sort((a,b) => (a.addedAt > b.addedAt ? -1 : 1));
-    return list.sort((a,b) => ((a.expiresInDays ?? 0) - (b.expiresInDays ?? 0)));
-  }, [query, sort]);
+    return list.sort((a,b) => ((a.expiresInDays ?? 999) - (b.expiresInDays ?? 999)));
+  }, [query, sort, items]);
 
-  const expiringSoon = DEMO_ITEMS
+  const expiringSoon = items
     .filter(i => i.status === "expiring")
     .sort((a,b) => (a.expiresInDays ?? 999) - (b.expiresInDays ?? 999))
     .slice(0, 5);
 
-  const recentlyAdded = DEMO_ITEMS
+  const recentlyAdded = items
     .slice()
     .sort((a,b) => (a.addedAt > b.addedAt ? -1 : 1))
     .slice(0, 5);
@@ -92,6 +114,7 @@ export default function DashboardHome() {
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Search"
                 className="border rounded-full px-3 py-1.5 text-base sm:text-sm flex-1 min-w-0"
+                disabled={loading}
               />
               <div className="hidden md:flex items-center gap-2">
                 <Pill color="#22c55e">Fresh</Pill>
@@ -105,6 +128,7 @@ export default function DashboardHome() {
                 value={sort}
                 onChange={e => setSort(e.target.value as "added" | "expires")}
                 className="border rounded-lg px-2 py-1 text-base sm:text-sm bg-white"
+                disabled={loading}
               >
                 <option value="added">Recently Added</option>
                 <option value="expires">Expires (Soonest First)</option>
@@ -112,30 +136,58 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          <div className="divide-y max-h-[40vh] sm:max-h-none overflow-y-auto">
-            {filtered.map(i => (
-              <div key={i.id} className="py-2 sm:py-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                  <span
-                    className="inline-block w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full flex-shrink-0"
-                    style={{
-                      backgroundColor:
-                        i.status === "fresh" ? "#22c55e" :
-                        i.status === "expiring" ? "#fbbf24" : "#ef4444",
-                    }}
-                  />
-                  <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
-                </div>
-                <span className="text-xs text-slate-500 flex-shrink-0">
-                  {i.status === "expired"
-                    ? "expired"
-                    : typeof i.expiresInDays === "number"
-                      ? `${i.expiresInDays}d`
-                      : ""}
-                </span>
+          {loading && (
+            <div className="text-center py-8 text-slate-500">
+              <p>Loading pantry items...</p>
+            </div>
+          )}
+
+          {error && (
+            <div className="text-center py-8">
+              <p className="text-red-600 mb-2">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="text-sm text-blue-600 hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="divide-y max-h-[40vh] sm:max-h-none overflow-y-auto">
+                {filtered.length === 0 ? (
+                  <div className="text-center py-8 text-slate-500">
+                    <p>No items found. {query ? "Try a different search." : "Add your first item to get started!"}</p>
+                  </div>
+                ) : (
+                  filtered.map(i => (
+                    <div key={i.id} className="py-2 sm:py-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                        <span
+                          className="inline-block w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor:
+                              i.status === "fresh" ? "#22c55e" :
+                              i.status === "expiring" ? "#fbbf24" : "#ef4444",
+                          }}
+                        />
+                        <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
+                      </div>
+                      <span className="text-xs text-slate-500 flex-shrink-0">
+                        {i.status === "expired"
+                          ? "expired"
+                          : typeof i.expiresInDays === "number"
+                            ? `${i.expiresInDays}d`
+                            : ""}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
-            ))}
-          </div>
+            </>
+          )}
 
           <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0">
             <Link href={"/pantry" as Route} className="text-xs sm:text-sm text-slate-600 hover:underline text-center sm:text-left">
