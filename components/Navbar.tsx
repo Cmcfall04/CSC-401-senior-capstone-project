@@ -52,7 +52,7 @@ export default function Navbar() {
           { name: "Recipes", href: "/recipes" },
           { name: "Shopping", href: "/shopping" },
           { name: "About", href: "/about" },
-          { name: "Admin", href: "/admin" },
+          { name: "Account", href: "/admin" },
         ]
       : [
           { name: "Home", href: "/" },

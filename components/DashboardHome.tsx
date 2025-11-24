@@ -150,7 +150,7 @@ export default function DashboardHome() {
 
         <div className="card p-4 sm:p-6">
           <h3 className="font-semibold mb-2 text-sm sm:text-base">Waste Saved</h3>
-          <p className="text-slate-600 text-xs sm:text-sm">TBD — we&apos;ll wire this to your tracking in Sprint 2.</p>
+          <p className="text-slate-600 text-xs sm:text-sm">TBD</p>
         </div>
       </section>
 

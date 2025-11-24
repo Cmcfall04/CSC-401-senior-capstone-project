@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import UnderConstruction from "@/components/UnderConstruction";
+import AccountSettings from "@/components/AccountSettings";
 
 export default async function AdminPage() {
   // Check if user is logged in
@@ -12,10 +12,5 @@ export default async function AdminPage() {
     redirect("/login");
   }
 
-  return (
-    <div className="grid gap-4">
-      <h1 className="text-2xl font-semibold">Admin</h1>
-      <UnderConstruction note="User management and roles coming soon." />
-    </div>
-  );
+  return <AccountSettings />;
 }

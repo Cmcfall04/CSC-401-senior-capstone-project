@@ -58,6 +58,21 @@ class ItemUpdate(BaseModel):
     quantity: Optional[int] = None
     expiration_date: Optional[date] = None
 
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+class ProfileResponse(BaseModel):
+    id: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
 class ItemResponse(BaseModel):
     id: str
     user_id: str
@@ -529,4 +544,204 @@ def get_expiring_items(
         }
     except Exception as e:
         logger.error(f"Error fetching expiring items for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# Profile/Account endpoints
+@app.get("/api/profile", response_model=ProfileResponse)
+def get_profile(user_id: Optional[str] = Depends(get_user_id)):
+    """Get the current user's profile"""
+    if not user_id:
+        logger.warning("GET /api/profile - Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        response = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching profile for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.put("/api/profile", response_model=ProfileResponse)
+def update_profile(profile_data: ProfileUpdate, user_id: Optional[str] = Depends(get_user_id)):
+    """Update the current user's profile"""
+    if not user_id:
+        logger.warning("PUT /api/profile - Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    # Build update data
+    update_data = {}
+    if profile_data.name is not None:
+        update_data["name"] = profile_data.name
+    if profile_data.email is not None:
+        update_data["email"] = profile_data.email
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+    
+    try:
+        logger.info(f"Updating profile for user {user_id} with data: {update_data}")
+        response = supabase.table("profiles").update(update_data).eq("id", user_id).execute()
+        
+        # Also update email in auth.users if email is being changed
+        if profile_data.email:
+            try:
+                supabase.auth.admin.update_user_by_id(
+                    user_id,
+                    {"email": profile_data.email}
+                )
+            except Exception as e:
+                logger.warning(f"Could not update email in auth.users: {str(e)}")
+        
+        logger.info(f"Profile updated successfully for user {user_id}")
+        return response.data[0]
+    except Exception as e:
+        logger.error(f"Error updating profile for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.post("/api/profile/change-password")
+def change_password(password_data: PasswordChangeRequest, user_id: Optional[str] = Depends(get_user_id)):
+    """Change the user's password"""
+    if not user_id:
+        logger.warning("POST /api/profile/change-password - Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Get user email from profile
+        profile_response = supabase.table("profiles").select("email").eq("id", user_id).execute()
+        if not profile_response.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        
+        user_email = profile_response.data[0].get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="User email not found")
+        
+        # Verify current password by attempting to sign in
+        try:
+            auth_response = supabase.auth.sign_in_with_password({
+                "email": user_email,
+                "password": password_data.current_password
+            })
+            if not auth_response.user:
+                raise HTTPException(status_code=401, detail="Current password is incorrect")
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "invalid" in error_msg or "credentials" in error_msg or "password" in error_msg:
+                logger.warning(f"Password verification failed for user {user_id}")
+                raise HTTPException(status_code=401, detail="Current password is incorrect")
+            raise
+        
+        # Update password using Supabase Admin API via REST API directly
+        # The Python client's admin API might have limitations, so we'll use REST API
+        import httpx
+        
+        try:
+            # Use Supabase REST API directly with service role key
+            admin_url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            headers = {
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "password": password_data.new_password
+            }
+            
+            # Make the API call
+            with httpx.Client(timeout=10.0) as client:
+                response = client.put(admin_url, json=payload, headers=headers)
+                
+                if response.status_code == 200:
+                    logger.info(f"Password changed successfully for user {user_id} via REST API")
+                elif response.status_code == 403 or response.status_code == 401:
+                    logger.error(f"Permission denied for password change: {response.text}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Password change is not available. Please use the 'Forgot Password' feature to reset your password via email."
+                    )
+                else:
+                    error_text = response.text
+                    logger.error(f"Password change failed: {response.status_code} - {error_text}")
+                    raise Exception(f"API returned {response.status_code}: {error_text}")
+                    
+        except HTTPException:
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"Network error during password change: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Network error while changing password. Please try again."
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            logger.error(f"Password change failed for user {user_id}: {error_msg}")
+            
+            if "not allowed" in error_msg or "permission" in error_msg or "forbidden" in error_msg:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Password change is not available. Please use the 'Forgot Password' feature to reset your password via email."
+                )
+            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to change password: {str(e)}"
+            )
+        
+        logger.info(f"Password changed successfully for user {user_id}")
+        return {"message": "Password changed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing password for user {user_id}: {str(e)}")
+        error_msg = str(e).lower()
+        if "not allowed" in error_msg:
+            raise HTTPException(
+                status_code=403,
+                detail="Password change is currently unavailable. Please use the 'Forgot Password' feature or contact support."
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
+
+@app.get("/api/profile/stats")
+def get_profile_stats(user_id: Optional[str] = Depends(get_user_id)):
+    """Get statistics about the user's account"""
+    if not user_id:
+        logger.warning("GET /api/profile/stats - Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Get total items count
+        items_response = supabase.table("items").select("id", count="exact").eq("user_id", user_id).execute()
+        total_items = items_response.count if hasattr(items_response, 'count') and items_response.count is not None else len(items_response.data)
+        
+        # Get expiring items count (next 7 days)
+        from datetime import timedelta
+        today = date.today()
+        future_date = today + timedelta(days=7)
+        expiring_response = supabase.table("items").select("id", count="exact").eq("user_id", user_id).not_.is_("expiration_date", "null").gte("expiration_date", today.isoformat()).lte("expiration_date", future_date.isoformat()).execute()
+        expiring_items = expiring_response.count if hasattr(expiring_response, 'count') and expiring_response.count is not None else len(expiring_response.data)
+        
+        # Get expired items count
+        expired_response = supabase.table("items").select("id", count="exact").eq("user_id", user_id).not_.is_("expiration_date", "null").lt("expiration_date", today.isoformat()).execute()
+        expired_items = expired_response.count if hasattr(expired_response, 'count') and expired_response.count is not None else len(expired_response.data)
+        
+        # Get profile to find account creation date
+        profile_response = supabase.table("profiles").select("created_at").eq("id", user_id).execute()
+        account_created = profile_response.data[0].get("created_at") if profile_response.data else None
+        
+        return {
+            "total_items": total_items,
+            "expiring_items": expiring_items,
+            "expired_items": expired_items,
+            "account_created": account_created
+        }
+    except Exception as e:
+        logger.error(f"Error fetching stats for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

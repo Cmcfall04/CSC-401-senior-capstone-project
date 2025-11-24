@@ -304,6 +304,83 @@ export async function withOptimisticUpdate<T>(
   }
 }
 
+// Profile types
+export interface Profile {
+  id: string;
+  name: string | null;
+  email: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProfileUpdate {
+  name?: string;
+  email?: string;
+}
+
+export interface ProfileStats {
+  total_items: number;
+  expiring_items: number;
+  expired_items: number;
+  account_created: string | null;
+}
+
+// Profile API functions
+export async function getProfile(): Promise<Profile> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch profile" }));
+    throw new Error(error.detail || "Failed to fetch profile");
+  }
+
+  return response.json();
+}
+
+export async function updateProfile(profile: ProfileUpdate): Promise<Profile> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile`, {
+    method: "PUT",
+    body: JSON.stringify(profile),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to update profile" }));
+    throw new Error(error.detail || "Failed to update profile");
+  }
+
+  return response.json();
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile/change-password`, {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to change password" }));
+    throw new Error(error.detail || "Failed to change password");
+  }
+}
+
+export async function getProfileStats(): Promise<ProfileStats> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile/stats`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch stats" }));
+    throw new Error(error.detail || "Failed to fetch stats");
+  }
+
+  return response.json();
+}
+
 // Helper to convert backend item to frontend format
 export function backendItemToFrontend(item: BackendItem) {
   const today = new Date();
