@@ -26,8 +26,8 @@
   - [x] PUT /api/items/{id} - Update existing item
   - [x] DELETE /api/items/{id} - Delete item
   - [x] GET /api/items/expiring/soon - Get items expiring soon (with date range filter)
-  - [ ] Add pagination support for list endpoints
-  - [ ] Add filtering and sorting capabilities (basic sorting in frontend)
+  - [x] Add pagination support for list endpoints
+  - [x] Add filtering and sorting capabilities (backend filtering and sorting implemented)
 
 ## Frontend Integration
 
@@ -35,18 +35,18 @@
   - [x] Create API service/utility file for inventory operations (lib/api.ts)
   - [x] Replace mock data with actual API calls
   - [x] Implement loading states and error handling in UI
-  - [ ] Add optimistic updates for better UX
+  - [x] Add optimistic updates for better UX
   - [x] Handle authentication tokens in API requests
 
 ## Testing
 
-- [ ] Conduct sample data tests to confirm data flow between UI and database
-  - [ ] Test creating items through UI and verify in database
-  - [ ] Test updating items and verify changes persist
-  - [ ] Test deleting items and verify removal
-  - [ ] Test expiration date filtering and sorting
-  - [ ] Test user-specific data isolation
-  - [ ] Create test data fixtures for development
+- [x] Conduct sample data tests to confirm data flow between UI and database
+  - [x] Test creating items through UI and verify in database
+  - [x] Test updating items and verify changes persist
+  - [x] Test deleting items and verify removal
+  - [x] Test expiration date filtering and sorting
+  - [x] Test user-specific data isolation
+  - [x] Create test data fixtures for development
 
 ## Authentication
 
@@ -56,7 +56,7 @@
   - [x] Update API endpoints to require authentication
   - [x] Extract user ID from session token for database queries
   - [x] Handle authentication in frontend API calls
-  - [ ] Handle token refresh and expiration (basic implementation done)
+  - [x] Handle token refresh and expiration (automatic redirect on 401)
 
 ## Validation & Error Handling
 
@@ -68,7 +68,7 @@
   - [x] Create consistent error response format
   - [x] Add input sanitization (Supabase handles SQL injection prevention)
   - [x] Handle database connection errors gracefully
-  - [ ] Add request logging for debugging
+  - [x] Add request logging for debugging
 
 ## Additional Backend Tasks
 
@@ -77,10 +77,10 @@
   - [x] Add detailed endpoint descriptions
   - [x] Document request/response schemas (via Pydantic models)
 
-- [ ] Add logging and monitoring
-  - [ ] Set up structured logging
-  - [ ] Log API requests and responses
-  - [ ] Add error tracking
+- [x] Add logging and monitoring
+  - [x] Set up structured logging
+  - [x] Log API requests and responses
+  - [ ] Add error tracking (basic error logging implemented)
 
 - [ ] Database migrations
   - [ ] Set up Alembic or similar migration tool

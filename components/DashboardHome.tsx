@@ -7,6 +7,8 @@ import type { Route } from "next";
 import { useMemo, useState, useEffect } from "react";
 import { type PantryItem } from "@/data/pantry-items";
 import { getItems, backendItemToFrontend } from "@/lib/api";
+import { useOptimisticItems } from "@/lib/hooks/useOptimisticItems";
+import AddItemModal from "./AddItemModal";
 
 type Item = PantryItem;
 
@@ -25,26 +27,73 @@ export default function DashboardHome() {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   // Fetch items from API
-  useEffect(() => {
-    async function fetchItems() {
-      try {
-        setLoading(true);
-        setError(null);
-        const backendItems = await getItems();
-        const frontendItems = backendItems.map(backendItemToFrontend);
+  const fetchItems = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      // Get all items with backend filtering/sorting
+      const response = await getItems({
+        sort_by: sort === "expires" ? "expiration_date" : "created_at",
+        sort_order: "desc",
+      });
+      
+      // Ensure response has items array
+      if (response && response.items && Array.isArray(response.items)) {
+        const frontendItems = response.items.map(backendItemToFrontend);
         setItems(frontendItems);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load items");
-        console.error("Error fetching items:", err);
-      } finally {
-        setLoading(false);
+      } else {
+        console.error("Unexpected response format:", response);
+        setError("Unexpected response format from API");
+        setItems([]); // Set empty array as fallback
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load items");
+      console.error("Error fetching items:", err);
+      setItems([]); // Set empty array on error
+    } finally {
+      setLoading(false);
     }
+  };
 
+  useEffect(() => {
     fetchItems();
-  }, []);
+  }, [sort]); // Re-fetch when sort changes
+
+  // Listen for refresh events (from optimistic updates)
+  useEffect(() => {
+    const handleRefresh = () => {
+      fetchItems();
+    };
+    window.addEventListener("items-refresh", handleRefresh);
+    return () => window.removeEventListener("items-refresh", handleRefresh);
+  }, [sort]);
+
+  // Set up optimistic update hooks
+  const {
+    optimisticCreate,
+    optimisticUpdate,
+    optimisticDelete,
+    isPending,
+    pendingId,
+  } = useOptimisticItems(items, setItems, fetchItems);
+
+  // Expose optimistic functions (can be used by child components or buttons)
+  // For now, these are available but not used in this component
+  // Components that need to create/update/delete can use these
+  useEffect(() => {
+    // Store optimistic functions in a way that child components can access them
+    // This is a simple pattern - in a more complex app, you might use Context API
+    (window as any).__optimisticItemsAPI = {
+      create: optimisticCreate,
+      update: optimisticUpdate,
+      delete: optimisticDelete,
+      isPending,
+      pendingId,
+    };
+  }, [optimisticCreate, optimisticUpdate, optimisticDelete, isPending, pendingId]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -193,10 +242,34 @@ export default function DashboardHome() {
             <Link href={"/pantry" as Route} className="text-xs sm:text-sm text-slate-600 hover:underline text-center sm:text-left">
               View full pantry →
             </Link>
-            <Link href={"/pantry" as Route} className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center hover:bg-green-700 transition-colors focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || isPending}
+            >
               Add Item to Pantry
-            </Link>
+            </button>
           </div>
+
+          {/* Add Item Modal */}
+          <AddItemModal
+            isOpen={showAddModal}
+            onClose={() => setShowAddModal(false)}
+            onCreate={async (itemData) => {
+              try {
+                await optimisticCreate({
+                  name: itemData.name,
+                  quantity: itemData.quantity,
+                  expiration_date: itemData.expiration_date,
+                });
+                // Modal will close on success (handled in AddItemModal)
+              } catch (err) {
+                // Error is handled in AddItemModal
+                throw err;
+              }
+            }}
+            isPending={isPending}
+          />
         </div>
       </section>
     </div>
