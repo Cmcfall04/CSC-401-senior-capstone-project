@@ -1,3 +1,101 @@
+# Backend Development Todo - Sprint 3
+
+## Sprint Goal
+Implement inventory management features and store data in the backend. Integrate and test the barcode scanning API for item logging. Begin refining overall system stability and usability.
+
+## Inventory Management System
+
+- [x] Enhance full inventory management system (add/edit/delete items)
+  - [x] Review and refine existing CRUD operations
+  - [ ] Add bulk operations (bulk delete, bulk update)
+  - [x] Implement item search and filtering improvements
+  - [ ] Add item categories/tags for better organization
+  - [ ] Implement quantity tracking and low stock alerts
+  - [ ] Add item notes/description fields
+
+## Barcode Integration
+
+- [ ] Integrate barcode API for auto-fill product data
+  - [ ] Research and choose API (OpenFoodFacts or UPCitemDB)
+  - [ ] Create backend endpoint for barcode lookup
+  - [ ] Implement product data fetching from barcode API
+  - [ ] Map API response to inventory item fields
+  - [ ] Add error handling for invalid/unfound barcodes
+  - [ ] Create frontend barcode scanning interface
+  - [ ] Integrate camera/scanning functionality (if applicable)
+  - [ ] Test barcode scanning end-to-end flow
+
+## Expiration Date Tracking
+
+- [x] Create expiration date tracking system
+  - [x] Enhance expiration date validation and handling
+  - [x] Implement "use-soon" alerts logic
+  - [ ] Create configurable alert thresholds (e.g., 3 days, 7 days)
+  - [x] Add visual indicators for expiring items in UI
+  - [x] Implement sorting by expiration date
+  - [x] Add expiration date filtering options
+  - [x] Create dashboard widget for expiring items
+
+## Data Persistence
+
+- [x] Ensure all inventory and expiration data is stored persistently in Supabase
+  - [x] Verify all CRUD operations persist correctly
+  - [x] Test data persistence across sessions
+  - [ ] Implement data backup/recovery considerations
+  - [x] Add data validation at database level
+  - [ ] Optimize database queries for performance
+
+## Notification Service
+
+- [ ] Begin implementing notification service
+  - [ ] Research and choose service (SendGrid or FCM)
+  - [ ] Set up notification service account and credentials
+  - [ ] Create backend notification service module
+  - [ ] Implement email notifications for expiring items (if SendGrid)
+  - [ ] Implement push notifications (if FCM)
+  - [ ] Create notification preferences/settings
+  - [ ] Add notification scheduling logic
+  - [ ] Test notification delivery
+
+## End-to-End Testing
+
+- [ ] Test end-to-end item creation, update, and deletion flow
+  - [x] Test complete item creation flow (manual entry)
+  - [ ] Test complete item creation flow (barcode scan)
+  - [x] Test item update flow with various scenarios
+  - [x] Test item deletion flow and confirmations
+  - [x] Test expiration date updates and alerts
+  - [x] Test user-specific data isolation
+  - [ ] Test concurrent operations and race conditions
+  - [ ] Create comprehensive test scenarios document
+
+## UI/UX Polish
+
+- [ ] Polish UI interactions and improve usability
+  - [x] Improve loading states and feedback
+  - [x] Enhance error messages and user guidance
+  - [ ] Add confirmation dialogs for destructive actions
+  - [x] Improve form validation and inline feedback
+  - [ ] Optimize mobile responsiveness
+  - [ ] Add keyboard shortcuts for common actions
+  - [ ] Improve accessibility (ARIA labels, keyboard navigation)
+  - [ ] Conduct usability testing and gather feedback
+  - [ ] Refine visual design and consistency
+
+## System Stability
+
+- [ ] Improve overall system stability
+  - [x] Add comprehensive error handling
+  - [ ] Implement retry logic for API calls
+  - [ ] Add request timeout handling
+  - [x] Improve error logging and monitoring
+  - [ ] Add performance monitoring
+  - [ ] Optimize database queries
+  - [ ] Add caching where appropriate
+  - [ ] Conduct load testing
+
+---
+
 # Backend Development Todo - Sprint 2
 
 ## Core Backend Setup
