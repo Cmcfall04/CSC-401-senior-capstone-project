@@ -1,5 +1,5 @@
 fastapi
 uvicorn
-sqlmodel
-psycopg2-binary
+supabase
+python-dotenv
 httpx

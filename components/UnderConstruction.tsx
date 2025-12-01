@@ -14,7 +14,7 @@ export default function UnderConstruction({
         <h2 className="text-xl font-semibold">{title}</h2>
       </div>
       <p className="text-slate-600">
-        This page is part of Sprint 1 and will be built out in Sprint 2.
+        This page is TBD.
       </p>
       {note && <p className="mt-2 text-slate-500">{note}</p>}
     </section>

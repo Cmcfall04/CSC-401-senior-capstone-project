@@ -5,14 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Route } from "next";
 import { useMemo, useState, useEffect } from "react";
+import { type PantryItem } from "@/data/pantry-items";
+import { getItems, backendItemToFrontend } from "@/lib/api";
+import { useOptimisticItems } from "@/lib/hooks/useOptimisticItems";
+import AddItemModal from "./AddItemModal";
 
-type Item = {
-  id: number;
-  name: string;
-  quantity: number;
-  expiration_date?: string;
-  created_at?: string;
-};
+type Item = PantryItem;
 
 function Pill({ color, children }: { color: string; children: React.ReactNode }) {
   return (
@@ -24,36 +22,95 @@ function Pill({ color, children }: { color: string; children: React.ReactNode })
 }
 
 export default function DashboardHome() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"added" | "expires">("added");
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  // Fetch items from API
+  const fetchItems = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      // Get all items with backend filtering/sorting
+      const response = await getItems({
+        sort_by: sort === "expires" ? "expiration_date" : "created_at",
+        sort_order: "desc",
+      });
+      
+      // Ensure response has items array
+      if (response && response.items && Array.isArray(response.items)) {
+        const frontendItems = response.items.map(backendItemToFrontend);
+        setItems(frontendItems);
+      } else {
+        console.error("Unexpected response format:", response);
+        setError("Unexpected response format from API");
+        setItems([]); // Set empty array as fallback
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load items");
+      console.error("Error fetching items:", err);
+      setItems([]); // Set empty array on error
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    fetch("http://localhost:8000/items")
-      .then(res => res.json())
-      .then(data => {
-        setItems(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Failed to fetch items:", err);
-        setLoading(false);
-      });
-  }, []);
+    fetchItems();
+  }, [sort]); // Re-fetch when sort changes
+
+  // Listen for refresh events (from optimistic updates)
+  useEffect(() => {
+    const handleRefresh = () => {
+      fetchItems();
+    };
+    window.addEventListener("items-refresh", handleRefresh);
+    return () => window.removeEventListener("items-refresh", handleRefresh);
+  }, [sort]);
+
+  // Set up optimistic update hooks
+  const {
+    optimisticCreate,
+    optimisticUpdate,
+    optimisticDelete,
+    isPending,
+    pendingId,
+  } = useOptimisticItems(items, setItems, fetchItems);
+
+  // Expose optimistic functions (can be used by child components or buttons)
+  // For now, these are available but not used in this component
+  // Components that need to create/update/delete can use these
+  useEffect(() => {
+    // Store optimistic functions in a way that child components can access them
+    // This is a simple pattern - in a more complex app, you might use Context API
+    (window as any).__optimisticItemsAPI = {
+      create: optimisticCreate,
+      update: optimisticUpdate,
+      delete: optimisticDelete,
+      isPending,
+      pendingId,
+    };
+  }, [optimisticCreate, optimisticUpdate, optimisticDelete, isPending, pendingId]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return items.filter(i => !q || i.name.toLowerCase().includes(q));
-  }, [query, items]);
+    const list = items.filter(i => !q || i.name.toLowerCase().includes(q));
+    if (sort === "added") return list.sort((a,b) => (a.addedAt > b.addedAt ? -1 : 1));
+    return list.sort((a,b) => ((a.expiresInDays ?? 999) - (b.expiresInDays ?? 999)));
+  }, [query, sort, items]);
 
-  const recentlyAdded = useMemo(() => {
-    return items.slice().sort((a,b) => 
-      (b.created_at || "").localeCompare(a.created_at || "")
-    ).slice(0, 5);
-  }, [items]);
+  const expiringSoon = items
+    .filter(i => i.status === "expiring")
+    .sort((a,b) => (a.expiresInDays ?? 999) - (b.expiresInDays ?? 999))
+    .slice(0, 5);
 
-  if (loading) return <div className="text-center py-8">Loading...</div>;
+  const recentlyAdded = items
+    .slice()
+    .sort((a,b) => (a.addedAt > b.addedAt ? -1 : 1))
+    .slice(0, 5);
 
   return (
     <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8 grid gap-4 sm:gap-8">
@@ -67,8 +124,16 @@ export default function DashboardHome() {
 
       <section className="grid gap-3 sm:gap-4 md:grid-cols-3">
         <div className="card p-4 sm:p-6">
-          <h3 className="font-semibold mb-2 text-sm sm:text-base">Total Items</h3>
-          <p className="text-3xl font-bold text-green-600">{items.length}</p>
+          <h3 className="font-semibold mb-2 text-sm sm:text-base">Expiring Soon</h3>
+          <ul className="text-slate-700 text-xs sm:text-sm space-y-1">
+            {expiringSoon.map(i => (
+              <li key={i.id} className="flex items-center justify-between">
+                <span className="truncate pr-2">{i.name}</span>
+                <span className="text-slate-400 flex-shrink-0">{i.expiresInDays! >= 0 ? `${i.expiresInDays}d` : "expired"}</span>
+              </li>
+            ))}
+            {expiringSoon.length === 0 && <li className="text-slate-400">Nothing expiring soon 🎉</li>}
+          </ul>
         </div>
 
         <div className="card p-4 sm:p-6">
@@ -85,7 +150,7 @@ export default function DashboardHome() {
 
         <div className="card p-4 sm:p-6">
           <h3 className="font-semibold mb-2 text-sm sm:text-base">Waste Saved</h3>
-          <p className="text-slate-600 text-xs sm:text-sm">TBD — we&apos;ll wire this to your tracking in Sprint 2.</p>
+          <p className="text-slate-600 text-xs sm:text-sm">TBD</p>
         </div>
       </section>
 
@@ -98,6 +163,7 @@ export default function DashboardHome() {
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Search"
                 className="border rounded-full px-3 py-1.5 text-base sm:text-sm flex-1 min-w-0"
+                disabled={loading}
               />
               <div className="hidden md:flex items-center gap-2">
                 <Pill color="#22c55e">Fresh</Pill>
@@ -111,6 +177,7 @@ export default function DashboardHome() {
                 value={sort}
                 onChange={e => setSort(e.target.value as "added" | "expires")}
                 className="border rounded-lg px-2 py-1 text-base sm:text-sm bg-white"
+                disabled={loading}
               >
                 <option value="added">Recently Added</option>
                 <option value="expires">Expires (Soonest First)</option>
@@ -118,27 +185,91 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          <div className="divide-y max-h-[40vh] sm:max-h-none overflow-y-auto">
-            {filtered.map(i => (
-              <div key={i.id} className="py-2 sm:py-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                  <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
-                </div>
-                <span className="text-xs text-slate-500 flex-shrink-0">
-                  Qty: {i.quantity}
-                </span>
+          {loading && (
+            <div className="text-center py-8 text-slate-500">
+              <p>Loading pantry items...</p>
+            </div>
+          )}
+
+          {error && (
+            <div className="text-center py-8">
+              <p className="text-red-600 mb-2">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="text-sm text-blue-600 hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="divide-y max-h-[40vh] sm:max-h-none overflow-y-auto">
+                {filtered.length === 0 ? (
+                  <div className="text-center py-8 text-slate-500">
+                    <p>No items found. {query ? "Try a different search." : "Add your first item to get started!"}</p>
+                  </div>
+                ) : (
+                  filtered.map(i => (
+                    <div key={i.id} className="py-2 sm:py-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                        <span
+                          className="inline-block w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor:
+                              i.status === "fresh" ? "#22c55e" :
+                              i.status === "expiring" ? "#fbbf24" : "#ef4444",
+                          }}
+                        />
+                        <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
+                      </div>
+                      <span className="text-xs text-slate-500 flex-shrink-0">
+                        {i.status === "expired"
+                          ? "expired"
+                          : typeof i.expiresInDays === "number"
+                            ? `${i.expiresInDays}d`
+                            : ""}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
-            ))}
-          </div>
+            </>
+          )}
 
           <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0">
             <Link href={"/pantry" as Route} className="text-xs sm:text-sm text-slate-600 hover:underline text-center sm:text-left">
               View full pantry →
             </Link>
-            <Link href={"/pantry" as Route} className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center hover:bg-green-700 transition-colors focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || isPending}
+            >
               Add Item to Pantry
-            </Link>
+            </button>
           </div>
+
+          {/* Add Item Modal */}
+          <AddItemModal
+            isOpen={showAddModal}
+            onClose={() => setShowAddModal(false)}
+            onCreate={async (itemData) => {
+              try {
+                await optimisticCreate({
+                  name: itemData.name,
+                  quantity: itemData.quantity,
+                  expiration_date: itemData.expiration_date,
+                });
+                // Modal will close on success (handled in AddItemModal)
+              } catch (err) {
+                // Error is handled in AddItemModal
+                throw err;
+              }
+            }}
+            isPending={isPending}
+          />
         </div>
       </section>
     </div>

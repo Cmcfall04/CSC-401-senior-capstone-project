@@ -1,0 +1,415 @@
+// lib/api.ts
+// API service for pantry items
+
+import { API_BASE_URL } from "./config";
+
+// Types matching backend response
+export interface BackendItem {
+  id: string;
+  user_id: string;
+  name: string;
+  quantity: number;
+  expiration_date: string | null;
+  added_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateItemRequest {
+  name: string;
+  quantity?: number;
+  expiration_date?: string | null; // ISO date string
+}
+
+export interface UpdateItemRequest {
+  name?: string;
+  quantity?: number;
+  expiration_date?: string | null;
+}
+
+// Helper to get user ID from session cookie
+function getUserId(): string | null {
+  if (typeof document === "undefined") return null;
+  
+  const cookies = document.cookie.split("; ");
+  const sessionCookie = cookies.find((c) => c.startsWith("sp_session="));
+  
+  if (!sessionCookie) return null;
+  
+  const token = sessionCookie.split("=")[1];
+  
+  // Handle old format: "user_{id}" or new format: UUID
+  if (token.startsWith("user_")) {
+    return token.replace("user_", "");
+  }
+  
+  return token;
+}
+
+// Helper to get auth header
+function getAuthHeader(): string | null {
+  const userId = getUserId();
+  if (!userId) return null;
+  return `Bearer ${userId}`;
+}
+
+// Helper to handle authentication errors and redirect if needed
+function handleAuthError(status: number): void {
+  if (status === 401) {
+    // Clear session cookie
+    document.cookie = "sp_session=; Max-Age=0; Path=/";
+    // Dispatch auth change event
+    window.dispatchEvent(new Event("auth-change"));
+    // Redirect to login after a brief delay to allow UI to update
+    setTimeout(() => {
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }, 100);
+  }
+}
+
+// Helper to make authenticated API requests with automatic error handling
+async function authenticatedFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const authHeader = getAuthHeader();
+  if (!authHeader) {
+    throw new Error("Not authenticated");
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: authHeader,
+      ...options.headers,
+    },
+  });
+
+  // Handle authentication errors globally
+  if (response.status === 401) {
+    handleAuthError(401);
+    throw new Error("Authentication required. Please log in again.");
+  }
+
+  return response;
+}
+
+// Paginated response type
+export interface PaginatedItemsResponse {
+  items: BackendItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+// API client functions
+export async function getItems(options?: {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  sort_by?: "name" | "expiration_date" | "created_at" | "quantity" | "added_at";
+  sort_order?: "asc" | "desc";
+  expiring_soon?: boolean;
+}): Promise<PaginatedItemsResponse> {
+  // Build query parameters
+  const params = new URLSearchParams();
+  if (options?.page) params.append("page", options.page.toString());
+  if (options?.page_size) params.append("page_size", options.page_size.toString());
+  if (options?.search) params.append("search", options.search);
+  if (options?.sort_by) params.append("sort_by", options.sort_by);
+  if (options?.sort_order) params.append("sort_order", options.sort_order);
+  if (options?.expiring_soon !== undefined) params.append("expiring_soon", options.expiring_soon.toString());
+
+  const url = `${API_BASE_URL}/api/items${params.toString() ? `?${params.toString()}` : ""}`;
+
+  const response = await authenticatedFetch(url, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch items" }));
+    throw new Error(error.detail || "Failed to fetch items");
+  }
+
+  const data = await response.json();
+
+  // Validate response structure
+  if (!data || typeof data !== 'object') {
+    throw new Error("Invalid response format from API");
+  }
+
+  // Handle both paginated and array responses (for backward compatibility)
+  if (Array.isArray(data)) {
+    // Legacy format - convert to paginated format
+    console.warn("API returned array format (legacy), converting to paginated format");
+    return {
+      items: data,
+      total: data.length,
+      page: 1,
+      page_size: data.length,
+      total_pages: 1
+    };
+  }
+
+  // New paginated format - ensure items array exists
+  if (!data.items) {
+    // If response doesn't have items, but is an object, it might be an error
+    console.error("Unexpected API response format:", data);
+    throw new Error("Response missing items array. Response: " + JSON.stringify(data));
+  }
+
+  if (!Array.isArray(data.items)) {
+    console.error("API response.items is not an array:", typeof data.items, data.items);
+    throw new Error("Response items is not an array");
+  }
+
+  return data;
+}
+
+export async function getItem(itemId: string): Promise<BackendItem> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/items/${itemId}`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Item not found");
+    }
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch item" }));
+    throw new Error(error.detail || "Failed to fetch item");
+  }
+
+  return response.json();
+}
+
+export async function createItem(item: CreateItemRequest): Promise<BackendItem> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/items`, {
+    method: "POST",
+    body: JSON.stringify(item),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to create item" }));
+    throw new Error(error.detail || "Failed to create item");
+  }
+
+  return response.json();
+}
+
+export async function updateItem(itemId: string, item: UpdateItemRequest): Promise<BackendItem> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/items/${itemId}`, {
+    method: "PUT",
+    body: JSON.stringify(item),
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Item not found");
+    }
+    const error = await response.json().catch(() => ({ detail: "Failed to update item" }));
+    throw new Error(error.detail || "Failed to update item");
+  }
+
+  return response.json();
+}
+
+export async function deleteItem(itemId: string): Promise<void> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/items/${itemId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Item not found");
+    }
+    const error = await response.json().catch(() => ({ detail: "Failed to delete item" }));
+    throw new Error(error.detail || "Failed to delete item");
+  }
+}
+
+export async function getExpiringItems(
+  days: number = 7,
+  options?: {
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedItemsResponse> {
+  // Build query parameters
+  const params = new URLSearchParams();
+  params.append("days", days.toString());
+  if (options?.page) params.append("page", options.page.toString());
+  if (options?.page_size) params.append("page_size", options.page_size.toString());
+
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/items/expiring/soon?${params.toString()}`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch expiring items" }));
+    throw new Error(error.detail || "Failed to fetch expiring items");
+  }
+
+  return response.json();
+}
+
+// Optimistic update utilities
+export interface OptimisticUpdateCallbacks<T> {
+  onOptimistic: () => void; // Called immediately before API call
+  onSuccess: (result: T) => void; // Called on successful API response
+  onError: (error: Error, rollback: () => void) => void; // Called on error, with rollback function
+}
+
+/**
+ * Executes an API call with optimistic UI updates
+ * Updates the UI immediately, then confirms or rolls back based on API response
+ */
+export async function withOptimisticUpdate<T>(
+  apiCall: () => Promise<T>,
+  callbacks: OptimisticUpdateCallbacks<T>
+): Promise<T> {
+  const { onOptimistic, onSuccess, onError } = callbacks;
+  
+  // Store current state for rollback (if needed)
+  let rollbackCalled = false;
+  const rollback = () => {
+    if (!rollbackCalled) {
+      rollbackCalled = true;
+      // Trigger a re-fetch or reload
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("items-refresh"));
+      }
+    }
+  };
+
+  try {
+    // Update UI optimistically
+    onOptimistic();
+    
+    // Execute API call
+    const result = await apiCall();
+    
+    // Update UI with confirmed data
+    onSuccess(result);
+    
+    return result;
+  } catch (error) {
+    // Rollback optimistic update
+    const err = error instanceof Error ? error : new Error(String(error));
+    onError(err, rollback);
+    throw err;
+  }
+}
+
+// Profile types
+export interface Profile {
+  id: string;
+  name: string | null;
+  email: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProfileUpdate {
+  name?: string;
+  email?: string;
+}
+
+export interface ProfileStats {
+  total_items: number;
+  expiring_items: number;
+  expired_items: number;
+  account_created: string | null;
+}
+
+// Profile API functions
+export async function getProfile(): Promise<Profile> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch profile" }));
+    throw new Error(error.detail || "Failed to fetch profile");
+  }
+
+  return response.json();
+}
+
+export async function updateProfile(profile: ProfileUpdate): Promise<Profile> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile`, {
+    method: "PUT",
+    body: JSON.stringify(profile),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to update profile" }));
+    throw new Error(error.detail || "Failed to update profile");
+  }
+
+  return response.json();
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile/change-password`, {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to change password" }));
+    throw new Error(error.detail || "Failed to change password");
+  }
+}
+
+export async function getProfileStats(): Promise<ProfileStats> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/profile/stats`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch stats" }));
+    throw new Error(error.detail || "Failed to fetch stats");
+  }
+
+  return response.json();
+}
+
+// Helper to convert backend item to frontend format
+export function backendItemToFrontend(item: BackendItem) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  let status: "fresh" | "expiring" | "expired" = "fresh";
+  let expiresInDays: number | undefined;
+
+  if (item.expiration_date) {
+    const expDate = new Date(item.expiration_date);
+    expDate.setHours(0, 0, 0, 0);
+    const diffTime = expDate.getTime() - today.getTime();
+    expiresInDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (expiresInDays < 0) {
+      status = "expired";
+    } else if (expiresInDays <= 3) {
+      status = "expiring";
+    } else {
+      status = "fresh";
+    }
+  }
+
+  return {
+    id: item.id,
+    name: item.name,
+    status,
+    addedAt: item.added_at.split("T")[0], // Extract date part
+    expiresInDays,
+  };
+}
+

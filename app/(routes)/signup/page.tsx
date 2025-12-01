@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import BasketIcon from "@/components/BasketIcon";
+import { API_BASE_URL } from "@/lib/config";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -47,7 +48,7 @@ export default function SignupPage() {
     }
 
     try {
-      const res = await fetch("http://localhost:8000/auth/signup", {
+      const res = await fetch(`${API_BASE_URL}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: `${firstName} ${lastName}`, email, password: pw }),
