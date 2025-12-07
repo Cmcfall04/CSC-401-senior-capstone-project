@@ -3,7 +3,7 @@
 
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useEffect } from "react";
 
 interface AddItemModalProps {
   isOpen: boolean;
@@ -18,6 +18,38 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
   const [expirationDate, setExpirationDate] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [selectedFood, setSelectedFood] = useState<any>(null);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+
+
+  // Debounced USDA search
+  useEffect(() => {
+    if (searchQuery.length < 3) {
+      setSearchResults([]);
+      setShowResults(false);
+      return;
+    }
+
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/api/food/search?query=${encodeURIComponent(searchQuery)}`);
+        const data = await response.json();
+        setSearchResults(data || []);
+        setShowResults(true);
+      } catch (err) {
+        console.error("Search error:", err);
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   if (!isOpen) return null;
 
@@ -80,8 +112,19 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
       setQuantity("1");
       setExpirationDate("");
       setError(null);
+      setSearchQuery("");
+      setSearchResults([]);
+      setSelectedFood(null);
+      setShowResults(false);
       onClose();
     }
+  };
+
+  const handleSelectFood = (food: any) => {
+    setSelectedFood(food);
+    setName(food.description || food.name || "");
+    setSearchQuery(food.description || food.name || "");
+    setShowResults(false);
   };
 
   // Get today's date in YYYY-MM-DD format for the date input min attribute
@@ -120,23 +163,70 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Item Name */}
-          <div>
-            <label htmlFor="item-name" className="block text-sm font-medium text-gray-700 mb-1">
-              Item Name <span className="text-red-500">*</span>
+          {/* USDA Food Search */}
+          <div className="relative">
+            <label htmlFor="food-search" className="block text-sm font-medium text-gray-700 mb-1">
+              Search Food Database <span className="text-red-500">*</span>
             </label>
             <input
-              id="item-name"
+              id="food-search"
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Milk, Bread, Eggs"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSelectedFood(null);
+              }}
+              placeholder="Type to search (e.g., milk, bread, eggs)..."
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-colors"
-              required
               disabled={submitting || isPending}
               autoFocus
             />
+            {searching && (
+              <div className="absolute right-3 top-9 text-gray-400">
+                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+            )}
+            
+            {/* Search Results Dropdown */}
+            {showResults && searchResults.length > 0 && (
+              <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                {searchResults.map((food, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleSelectFood(food)}
+                    className="w-full text-left px-3 py-2 hover:bg-green-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                  >
+                    <div className="font-medium text-sm text-gray-800">{food.description}</div>
+                    <div className="text-xs text-gray-500">
+                      {food.brandName && `${food.brandName} • `}
+                      {food.dataType}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            
+            {showResults && searchResults.length === 0 && !searching && (
+              <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
+                <p className="text-sm text-gray-500">No results found. Try a different search term.</p>
+              </div>
+            )}
           </div>
+
+          {/* Selected Food Info */}
+          {selectedFood && (
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-sm font-medium text-green-800">✓ Selected: {selectedFood.description}</p>
+              <p className="text-xs text-green-600 mt-1">Nutritional data will be automatically saved</p>
+            </div>
+          )}
+
+          {/* Item Name (hidden, auto-filled) */}
+          <input type="hidden" value={name} />
 
           {/* Quantity */}
           <div>

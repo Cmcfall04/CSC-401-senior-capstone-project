@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import httpx
 from datetime import date, datetime
 from uuid import UUID
 from pathlib import Path
@@ -21,6 +22,7 @@ except ImportError:
 # Get Supabase configuration from environment
 SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+USDA_API_KEY = os.getenv("USDA_API_KEY")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL environment variable is required")
@@ -504,6 +506,7 @@ def delete_item(item_id: str, user_id: Optional[str] = Depends(get_user_id)):
         logger.error(f"Error deleting item {item_id} for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+
 @app.get("/api/items/expiring/soon", response_model=PaginatedItemsResponse)
 def get_expiring_items(
     days: int = Query(7, ge=1, le=365, description="Number of days to look ahead"),
@@ -745,3 +748,71 @@ def get_profile_stats(user_id: Optional[str] = Depends(get_user_id)):
     except Exception as e:
         logger.error(f"Error fetching stats for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+# USDA Food API endpoints
+@app.get("/api/food/search")
+async def search_food(query: str):
+    """Search USDA FoodData Central for foods"""
+    if not USDA_API_KEY:
+        raise HTTPException(status_code=500, detail="USDA API key not configured")
+    
+    logger.info(f"Searching USDA API for: {query}")
+    try:
+        url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={query}&pageSize=10&api_key={USDA_API_KEY}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            data = response.json()
+            foods = data.get("foods", [])
+            logger.info(f"Found {len(foods)} results for query: {query}")
+            return foods
+    except Exception as e:
+        logger.error(f"Error searching USDA API: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"USDA API error: {str(e)}")
+
+@app.post("/api/items/from-usda")
+async def create_item_from_usda(
+    usda_fdc_id: int,
+    name: str,
+    quantity: int = 1,
+    expiration_date: Optional[str] = None,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Create pantry item with USDA nutritional data"""
+    if not user_id:
+        logger.warning("POST /api/items/from-usda - Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if not USDA_API_KEY:
+        raise HTTPException(status_code=500, detail="USDA API key not configured")
+    
+    try:
+        # Fetch nutrition from USDA API
+        logger.info(f"Fetching USDA data for fdcId: {usda_fdc_id}")
+        url = f"https://api.nal.usda.gov/fdc/v1/food/{usda_fdc_id}?api_key={USDA_API_KEY}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            usda_data = response.json()
+        
+        # Extract nutrition from labelNutrients
+        label = usda_data.get("labelNutrients", {})
+        
+        # Create item with nutritional data
+        new_item = {
+            "user_id": user_id,
+            "name": name,
+            "quantity": quantity,
+            "expiration_date": expiration_date,
+            "usda_fdc_id": usda_fdc_id,
+            "calories": label.get("calories", {}).get("value", 0),
+            "protein": label.get("protein", {}).get("value", 0),
+            "carbs": label.get("carbohydrates", {}).get("value", 0),
+            "fat": label.get("fat", {}).get("value", 0),
+        }
+        
+        result = supabase.table("items").insert(new_item).execute()
+        logger.info(f"Item created from USDA: {result.data[0].get('id')} for user: {user_id}")
+        return result.data[0]
+    except Exception as e:
+        logger.error(f"Error creating item from USDA for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
