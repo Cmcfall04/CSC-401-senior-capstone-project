@@ -1,5 +1,7 @@
 import os
 import logging
+import base64
+import json
 import time
 import httpx
 from datetime import date, datetime
@@ -10,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from supabase import create_client, Client
+from fastapi import UploadFile, File
+
 
 # Load environment variables from .env file if it exists
 try:
@@ -23,14 +27,20 @@ except ImportError:
 SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 USDA_API_KEY = os.getenv("USDA_API_KEY")
+OPEN_AI_KEY = os.getenv("OPEN_AI_KEY")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL environment variable is required")
 if not SUPABASE_SERVICE_KEY:
     raise ValueError("SUPABASE_SERVICE_ROLE_KEY environment variable is required")
 
+
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# Initialize the Openai client w/ key
+from openai import OpenAI
+openai_client = OpenAI(api_key=OPEN_AI_KEY) if OPEN_AI_KEY else None
 
 # Configure logging
 logging.basicConfig(
@@ -816,3 +826,45 @@ async def create_item_from_usda(
     except Exception as e:
         logger.error(f"Error creating item from USDA for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/api/reciept/scan")
+async def scan_reciept(
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        if not USDA_API_KEY:
+            raise HTTPException(status_code=500, detail="USDA API key not configured")
+        file: UploadFile = File(...),
+        user_id: Optional[str] = Depends(get_user_id)
+
+        try:
+            # reads the uploaded image as bytes
+            image_data = await file.read()
+
+            # converts bytes to base64
+            base64_image = base64.b64encode(image_data).decode('utf-8')
+
+            # makes it a regular string
+            logger.info(f"Reciept Image recieved: size: {len(image_data)} bytes")
+
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Extract all food items from this receipt. Return ONLY a JSON array like: [{\"name\": \"Milk\", \"quantity\": 2}, {\"name\": \"Bread\", \"quantity\": 1}]"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=500
+            )

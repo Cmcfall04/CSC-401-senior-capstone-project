@@ -15,6 +15,7 @@ An AI-powered application designed to reduce household food waste by helping use
 - [Team Information](#team-information)  
 - [Features](#features)  
 - [Technology Stack](#technology-stack)  
+- [Setup Instructions](#setup-instructions)  
 - [Sprint Outline](#sprint-outline)  
 - [Extra Work](#extra-work)  
 - [Links](#links)  
@@ -50,11 +51,81 @@ Smart Pantry helps households reduce food waste and save money by managing pantr
 
 ## Technology Stack
 
-- **Backend Development:** FastAPI with MySQL for database and server logic  
+- **Backend Development:** FastAPI with Supabase for database and server logic  
 - **Frontend Development:** Next.js interface for mobile and web users  
-- **Computer Vision:** OpenCV + Tesseract for barcode/label recognition  
-- **APIs & Integrations:** Barcode lookup, Spoonacular (recipes), OAuth authentication, and map services  
+- **AI/ML:** OpenAI GPT-4 Vision for receipt scanning and OCR  
+- **APIs & Integrations:** USDA FoodData Central, OpenAI, Supabase Auth  
 - **Testing & Deployment:** Feature testing, UI/UX refinement, deployed prototype with Vercel  
+
+---
+
+## Setup Instructions
+
+### Prerequisites
+- **Node.js** (v18 or higher) - [Download](https://nodejs.org/)
+- **Python** (v3.11 or higher) - [Download](https://www.python.org/)
+- **Git** - [Download](https://git-scm.com/)
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/Cmcfall04/CSC-401-senior-capstone-project.git
+cd CSC-401-senior-capstone-project
+```
+
+### 2. Environment Variables
+Create a `.env` file in the project root with:
+```bash
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# APIs
+USDA_API_KEY=your_usda_api_key
+OPENAI_API_KEY=your_openai_api_key
+
+# CORS
+ALLOWED_ORIGINS=http://localhost:3000
+```
+
+### 3. Frontend Setup
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+```
+Frontend will run on http://localhost:3000
+
+### 4. Backend Setup
+```bash
+# Navigate to api folder
+cd api
+
+# Install Python dependencies
+pip install fastapi uvicorn supabase python-dotenv httpx pydantic openai pillow python-multipart
+
+# Run backend server
+python -m uvicorn src.main:app --reload
+```
+Backend will run on http://localhost:8000
+
+### 5. API Keys Setup
+
+**Supabase:**
+1. Create account at https://supabase.com
+2. Create new project
+3. Get URL and service role key from Settings > API
+
+**USDA FoodData Central:**
+1. Sign up at https://fdc.nal.usda.gov/api-key-signup.html
+2. Get free API key
+
+**OpenAI (for receipt scanning):**
+1. Create account at https://platform.openai.com/
+2. Go to API Keys section
+3. Create new secret key
 
 ---
 

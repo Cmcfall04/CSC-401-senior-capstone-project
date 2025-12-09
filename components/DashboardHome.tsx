@@ -9,6 +9,7 @@ import { type PantryItem } from "@/data/pantry-items";
 import { getItems, backendItemToFrontend } from "@/lib/api";
 import { useOptimisticItems } from "@/lib/hooks/useOptimisticItems";
 import AddItemModal from "./AddItemModal";
+import ReceiptScannerModal from "./ReceiptScannerModal";
 
 type Item = PantryItem;
 
@@ -28,6 +29,7 @@ export default function DashboardHome() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showScanModal, setShowScanModal] = useState(false);
 
   // Fetch items from API
   const fetchItems = async () => {
@@ -242,13 +244,23 @@ export default function DashboardHome() {
             <Link href={"/pantry" as Route} className="text-xs sm:text-sm text-slate-600 hover:underline text-center sm:text-left">
               View full pantry →
             </Link>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center hover:bg-green-700 transition-colors focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={loading || isPending}
-            >
-              Add Item to Pantry
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowScanModal(true)}
+                className="px-4 py-2 rounded-full bg-blue-600 text-white text-xs sm:text-sm text-center hover:bg-blue-700 transition-colors focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loading || isPending}
+              >
+
+                Scan Receipt
+              </button>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="px-4 py-2 rounded-full bg-green-600 text-white text-xs sm:text-sm text-center hover:bg-green-700 transition-colors focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loading || isPending}
+              >
+                Add Item to Pantry
+              </button>
+            </div>
           </div>
 
           {/* Add Item Modal */}
@@ -269,6 +281,12 @@ export default function DashboardHome() {
               }
             }}
             isPending={isPending}
+          />
+
+          {/* Receipt Scanner Modal */}
+          <ReceiptScannerModal
+            isOpen={showScanModal}
+            onClose={() => setShowScanModal(false)}
           />
         </div>
       </section>
