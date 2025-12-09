@@ -827,44 +827,60 @@ async def create_item_from_usda(
         logger.error(f"Error creating item from USDA for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-@app.post("/api/reciept/scan")
-async def scan_reciept(
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        if not USDA_API_KEY:
-            raise HTTPException(status_code=500, detail="USDA API key not configured")
-        file: UploadFile = File(...),
-        user_id: Optional[str] = Depends(get_user_id)
-
-        try:
-            # reads the uploaded image as bytes
-            image_data = await file.read()
-
-            # converts bytes to base64
-            base64_image = base64.b64encode(image_data).decode('utf-8')
-
-            # makes it a regular string
-            logger.info(f"Reciept Image recieved: size: {len(image_data)} bytes")
-
-            response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Extract all food items from this receipt. Return ONLY a JSON array like: [{\"name\": \"Milk\", \"quantity\": 2}, {\"name\": \"Bread\", \"quantity\": 1}]"
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
-                                }
+@app.post("/api/receipt/scan")
+async def scan_receipt(
+    file: UploadFile = File(...),
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Scan receipt image using OpenAI Vision API"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if not openai_client:
+        raise HTTPException(status_code=500, detail="OpenAI API not configured")
+    
+    try:
+        # Read the uploaded image as bytes
+        image_data = await file.read()
+        
+        # Convert bytes to base64
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        logger.info(f"Receipt image received: size: {len(image_data)} bytes")
+        
+        # Call OpenAI Vision API
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all food items from this receipt. Return ONLY a JSON array like: [{\"name\": \"Milk\", \"quantity\": 2}, {\"name\": \"Bread\", \"quantity\": 1}]"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
                             }
-                        ]
-                    }
-                ],
-                max_tokens=500
-            )
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500
+        )
+        
+        # Extract items from response
+        content = response.choices[0].message.content
+        items = json.loads(content)
+        
+        logger.info(f"Extracted {len(items)} items from receipt")
+        return {"items": items}
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse OpenAI response: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to parse receipt data")
+    except Exception as e:
+        logger.error(f"Error scanning receipt: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
