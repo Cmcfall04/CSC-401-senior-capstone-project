@@ -2,6 +2,7 @@ import os
 import logging
 import base64
 import json
+import re
 import time
 import httpx
 from datetime import date, datetime
@@ -27,7 +28,7 @@ except ImportError:
 SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 USDA_API_KEY = os.getenv("USDA_API_KEY")
-OPEN_AI_KEY = os.getenv("OPEN_AI_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL environment variable is required")
@@ -40,7 +41,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # Initialize the Openai client w/ key
 from openai import OpenAI
-openai_client = OpenAI(api_key=OPEN_AI_KEY) if OPEN_AI_KEY else None
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # Configure logging
 logging.basicConfig(
@@ -873,11 +874,61 @@ async def scan_receipt(
         
         # Extract items from response
         content = response.choices[0].message.content
+        logger.info(f"GPT-4 raw response: {content}")
+        
+        # Extract JSON from response (GPT sometimes adds extra text)
+        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(0)
+        else:
+            logger.error(f"No JSON array found in response: {content}")
+            raise ValueError("Could not find JSON array in response")
+        
         items = json.loads(content)
-        
-        logger.info(f"Extracted {len(items)} items from receipt")
-        return {"items": items}
-        
+
+        # Insert items into database
+        added_items = []
+        for item in items:
+            new_item = {
+                "user_id": user_id,
+                "name": item.get("name", ""),
+                "quantity": item.get("quantity", 1)
+            }
+
+            # Try to get USDA data with cleaned search term
+            if USDA_API_KEY:
+                try:
+                    # Clean item name for better USDA matching
+                    search_name = item.get('name', '').lower()
+                    # Remove common abbreviations and brand-specific terms
+                    search_name = search_name.replace('qtrs', 'quarters').replace('lt', 'light').replace('crm', 'cream')
+                    search_name = search_name.replace('eng', 'english').replace('unc', 'uncured')
+                    # Remove extra spaces
+                    search_name = ' '.join(search_name.split())
+                    
+                    usda_url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={search_name}&pageSize=1&api_key={USDA_API_KEY}"
+                    async with httpx.AsyncClient() as client:
+                        usda_response = await client.get(usda_url)
+                        usda_data = usda_response.json()
+                        if usda_data.get("foods"):
+                            food = usda_data["foods"][0]
+                            fdc_id = food.get("fdcId")
+                            usda_name = food.get("description", item.get('name', ''))
+                            new_item["usda_fdc_id"] = fdc_id
+                            new_item["name"] = usda_name
+                            logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                        else:
+                            logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
+                except Exception as e:
+                    logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            result = supabase.table("items").insert(new_item).execute()
+            added_items.append(result.data[0])
+
+        logger.info(f"Added {len(added_items)} items to pantry for user {user_id}")
+        return {"items": added_items, "count": len(added_items)}
+
+
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse OpenAI response: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")

@@ -32,12 +32,41 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
     if (!selectedFile) return;
     
     setIsScanning(true);
-    // TODO: Send to backend API
-    setTimeout(() => {
-      alert("Receipt scanning will be implemented soon!");
-      setIsScanning(false);
+
+    try{
+      const token = document.cookie
+          .split('; ')
+          .find(row => row.startsWith('sp_session='))
+          ?.split('=')[1];
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      // sending to backend
+      const response = await fetch('http://localhost:8000/api/receipt/scan', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to scan receipt');
+      }
+
+      const data = await response.json()
+      console.log('Scanned items:', data.items);
+
+      alert(`Found ${data.items.length} items:\n${data.items.map((item: any) => `- ${item.name} (${item.quantity})`).join('\n')}`);
+
       onClose();
-    }, 1000);
+    } catch (error) {
+      console.error('Error scanning receipt:', error);
+      alert('Failed to scan receipt. Please try again.');
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const handleClose = () => {
