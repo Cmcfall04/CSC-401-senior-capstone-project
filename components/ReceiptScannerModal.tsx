@@ -65,21 +65,23 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
     setIsPolling(false);
   }, []);
 
-  const updateQrCodeUrl = useCallback((token: string) => {
+  const updateQrCodeUrl = useCallback((token: string, ipOverride?: string) => {
     let baseUrl = 'http://localhost:3000';
     if (typeof window !== 'undefined') {
       const currentHost = window.location.hostname;
       const currentPort = window.location.port || '3000';
       
-      if (localIp) {
-        // Use detected local IP
-        baseUrl = `http://${localIp}:${currentPort}`;
+      const ipToUse = ipOverride || localIp;
+      
+      if (ipToUse && /^(\d{1,3}\.){3}\d{1,3}$/.test(ipToUse)) {
+        // Use provided IP address
+        baseUrl = `http://${ipToUse}:${currentPort}`;
       } else if (currentHost !== 'localhost' && currentHost !== '127.0.0.1') {
         // Already using IP address
         baseUrl = window.location.origin;
       } else {
         // Using localhost - need IP for mobile access
-        baseUrl = `http://${localIp || 'YOUR_IP'}:${currentPort}`;
+        baseUrl = `http://YOUR_IP:${currentPort}`;
       }
     }
     const scanUrl = `${baseUrl}/scan-receipt?token=${token}`;
@@ -298,36 +300,45 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-2">Scan with Your Phone</p>
                 <p className="text-xs text-slate-500 mb-2">Scan this QR code with your phone to take a photo of your receipt</p>
-                {!localIp && (
-                  <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-left">
-                    <p className="text-xs text-yellow-800 font-medium mb-1">⚠️ Need to set your IP address</p>
-                    <p className="text-xs text-yellow-700 mb-2">Enter your computer's local IP address so your phone can connect:</p>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="192.168.1.xxx"
-                        value={localIp || ''}
-                        onChange={(e) => setLocalIp(e.target.value)}
-                        className="flex-1 px-2 py-1 text-xs border border-yellow-300 rounded"
-                      />
-                      <button
-                        onClick={() => {
-                          if (localIp && scanToken) {
-                            updateQrCodeUrl(scanToken);
-                          }
-                        }}
-                        className="px-2 py-1 text-xs bg-yellow-600 text-white rounded hover:bg-yellow-700"
-                      >
-                        Update
-                      </button>
-                    </div>
-                    <p className="text-xs text-yellow-600 mt-1">
-                      Find it: Windows: <code className="bg-yellow-100 px-1 rounded">ipconfig</code> | Mac/Linux: <code className="bg-yellow-100 px-1 rounded">ifconfig</code>
-                    </p>
+                <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded text-left">
+                  <p className="text-xs text-yellow-800 font-medium mb-1">⚠️ Need to set your IP address</p>
+                  <p className="text-xs text-yellow-700 mb-2">Enter your computer's local IP address so your phone can connect:</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="192.168.1.xxx"
+                      value={localIp || ''}
+                      onChange={(e) => {
+                        const newIp = e.target.value.trim();
+                        setLocalIp(newIp);
+                        // Auto-update QR code when valid IP is entered
+                        if (newIp && scanToken && /^(\d{1,3}\.){3}\d{1,3}$/.test(newIp)) {
+                          updateQrCodeUrl(scanToken, newIp);
+                        }
+                      }}
+                      className="flex-1 px-2 py-1 text-xs border border-yellow-300 rounded focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                    />
+                    <button
+                      onClick={() => {
+                        if (localIp && scanToken && /^(\d{1,3}\.){3}\d{1,3}$/.test(localIp)) {
+                          updateQrCodeUrl(scanToken, localIp);
+                        }
+                      }}
+                      disabled={!localIp || !scanToken || !/^(\d{1,3}\.){3}\d{1,3}$/.test(localIp)}
+                      className="px-3 py-1 text-xs bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Update
+                    </button>
                   </div>
-                )}
+                  <p className="text-xs text-yellow-600 mt-2">
+                    Find it: Windows: <code className="bg-yellow-100 px-1 rounded">ipconfig</code> | Mac/Linux: <code className="bg-yellow-100 px-1 rounded">ifconfig</code>
+                  </p>
+                  {localIp && !/^(\d{1,3}\.){3}\d{1,3}$/.test(localIp) && (
+                    <p className="text-xs text-red-600 mt-1">⚠️ Please enter a valid IP address (e.g., 192.168.1.100)</p>
+                  )}
+                </div>
               </div>
-              {qrCodeUrl && !qrCodeUrl.includes('YOUR_IP') ? (
+              {qrCodeUrl && !qrCodeUrl.includes('YOUR_IP') && localIp && /^(\d{1,3}\.){3}\d{1,3}$/.test(localIp) ? (
                 <div className="flex justify-center">
                   <div className="bg-white p-4 rounded-lg">
                     <QRCodeSVG value={qrCodeUrl} size={200} />
