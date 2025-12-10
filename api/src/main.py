@@ -5,13 +5,14 @@ import json
 import re
 import time
 import httpx
+import uuid
 from datetime import date, datetime
 from uuid import UUID
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from supabase import create_client, Client
 from fastapi import UploadFile, File
 
@@ -42,6 +43,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # Initialize the Openai client w/ key
 from openai import OpenAI
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# In-memory store for scan sessions (in production, use Redis or database)
+scan_sessions: Dict[str, Dict] = {}
 
 # Configure logging
 logging.basicConfig(
@@ -110,14 +114,52 @@ app = FastAPI(
 )
 
 # CORS configuration
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+
+# For development, also allow common localhost ports and local network IPs
+if os.getenv("NODE_ENV", "development") == "development":
+    common_ports = ["3000", "3001", "3002", "5173", "5174"]  # Common dev server ports
+    for port in common_ports:
+        origins_to_add = [
+            f"http://localhost:{port}",
+            f"http://127.0.0.1:{port}",
+        ]
+        for origin in origins_to_add:
+            if origin not in allowed_origins:
+                allowed_origins.append(origin)
+    
+    # Allow all local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) for mobile access
+    # This is a regex pattern that will match any local IP
+    import re
+    local_ip_pattern = re.compile(r'^http://(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)')
+    
+    # We'll use a custom CORS handler that checks for local IPs
+    # For now, allow all origins in development (you can restrict this in production)
+    logger.info("Development mode: Allowing all local network origins for mobile access")
+
+# In development, allow local network IPs using regex pattern
+if os.getenv("NODE_ENV", "development") == "development":
+    # Regex pattern to match local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost)
+    local_network_regex = r"http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(:\d+)?"
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_origin_regex=local_network_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info("Development mode: Allowing local network IPs via regex pattern")
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Request logging middleware
 @app.middleware("http")
@@ -191,6 +233,8 @@ def startup():
     """Initialize application on startup"""
     logger.info("Starting Smart Pantry API...")
     logger.info(f"Supabase URL: {SUPABASE_URL[:30]}...")  # Log partial URL for security
+    logger.info(f"CORS allowed origins: {allowed_origins}")
+    logger.info(f"API listening on: http://0.0.0.0:8000")
     logger.info("API startup complete. Ready to handle requests.")
 
 # Authentication endpoints
@@ -935,3 +979,180 @@ async def scan_receipt(
     except Exception as e:
         logger.error(f"Error scanning receipt: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+
+
+@app.post("/api/receipt/create-session")
+async def create_scan_session(
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Create a scan session and return a token for mobile scanning"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    # Generate unique token
+    token = str(uuid.uuid4())
+    
+    # Store session
+    scan_sessions[token] = {
+        "user_id": user_id,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+        "result": None
+    }
+    
+    logger.info(f"Created scan session {token} for user {user_id}")
+    return {"token": token}
+
+
+@app.post("/api/receipt/scan-mobile")
+async def scan_receipt_mobile(
+    file: UploadFile = File(...),
+    token: str = Query(...)
+):
+    """Scan receipt from mobile device using token"""
+    if token not in scan_sessions:
+        raise HTTPException(status_code=404, detail="Invalid scan token")
+    
+    session = scan_sessions[token]
+    user_id = session["user_id"]
+    
+    if session["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Scan session already completed")
+    
+    if not openai_client:
+        raise HTTPException(status_code=500, detail="OpenAI API not configured")
+    
+    try:
+        # Read the uploaded image as bytes
+        image_data = await file.read()
+        
+        # Convert bytes to base64
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        logger.info(f"Mobile receipt image received: size: {len(image_data)} bytes for session {token}")
+        
+        # Call OpenAI Vision API
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all food items from this receipt. Return ONLY a JSON array like: [{\"name\": \"Milk\", \"quantity\": 2}, {\"name\": \"Bread\", \"quantity\": 1}]"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500
+        )
+        
+        # Extract items from response
+        content = response.choices[0].message.content
+        logger.info(f"GPT-4 raw response: {content}")
+        
+        # Extract JSON from response (GPT sometimes adds extra text)
+        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(0)
+        else:
+            logger.error(f"No JSON array found in response: {content}")
+            raise ValueError("Could not find JSON array in response")
+        
+        items = json.loads(content)
+
+        # Insert items into database
+        added_items = []
+        for item in items:
+            new_item = {
+                "user_id": user_id,
+                "name": item.get("name", ""),
+                "quantity": item.get("quantity", 1)
+            }
+
+            # Try to get USDA data with cleaned search term
+            if USDA_API_KEY:
+                try:
+                    # Clean item name for better USDA matching
+                    search_name = item.get('name', '').lower()
+                    # Remove common abbreviations and brand-specific terms
+                    search_name = search_name.replace('qtrs', 'quarters').replace('lt', 'light').replace('crm', 'cream')
+                    search_name = search_name.replace('eng', 'english').replace('unc', 'uncured')
+                    # Remove extra spaces
+                    search_name = ' '.join(search_name.split())
+                    
+                    usda_url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={search_name}&pageSize=1&api_key={USDA_API_KEY}"
+                    async with httpx.AsyncClient() as client:
+                        usda_response = await client.get(usda_url)
+                        usda_data = usda_response.json()
+                        if usda_data.get("foods"):
+                            food = usda_data["foods"][0]
+                            fdc_id = food.get("fdcId")
+                            usda_name = food.get("description", item.get('name', ''))
+                            new_item["usda_fdc_id"] = fdc_id
+                            new_item["name"] = usda_name
+                            logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                        else:
+                            logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
+                except Exception as e:
+                    logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            result = supabase.table("items").insert(new_item).execute()
+            added_items.append(result.data[0])
+
+        logger.info(f"Added {len(added_items)} items to pantry for user {user_id} via mobile scan")
+        
+        # Update session with result
+        scan_sessions[token]["status"] = "completed"
+        scan_sessions[token]["result"] = {
+            "items": added_items,
+            "count": len(added_items)
+        }
+        scan_sessions[token]["completed_at"] = datetime.now().isoformat()
+        
+        return {"success": True, "items": added_items, "count": len(added_items)}
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse OpenAI response: {str(e)}")
+        scan_sessions[token]["status"] = "error"
+        scan_sessions[token]["result"] = {"error": "Failed to parse receipt data"}
+        raise HTTPException(status_code=500, detail="Failed to parse receipt data")
+    except Exception as e:
+        logger.error(f"Error scanning receipt: {str(e)}")
+        scan_sessions[token]["status"] = "error"
+        scan_sessions[token]["result"] = {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+
+
+@app.get("/api/receipt/scan-result/{token}")
+async def get_scan_result(
+    token: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Get scan result by token"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if token not in scan_sessions:
+        raise HTTPException(status_code=404, detail="Scan session not found")
+    
+    session = scan_sessions[token]
+    
+    # Verify user owns this session
+    if session["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if session["status"] == "pending":
+        return {"status": "pending", "result": None}
+    
+    return {
+        "status": session["status"],
+        "result": session["result"]
+    }

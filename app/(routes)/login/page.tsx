@@ -6,6 +6,12 @@ import Link from "next/link";
 import BasketIcon from "@/components/BasketIcon";
 import { API_BASE_URL } from "@/lib/config";
 
+// Log API URL on component mount for debugging
+if (typeof window !== "undefined") {
+  console.log("API_BASE_URL:", API_BASE_URL);
+  console.log("Current origin:", window.location.origin);
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -32,22 +38,39 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      console.log("Attempting to connect to:", `${API_BASE_URL}/auth/login`);
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password: pw }),
+        mode: "cors", // Explicitly set CORS mode
       });
       
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || "Login failed");
+        let errorMessage = "Login failed";
+        try {
+          const data = await res.json();
+          errorMessage = data.detail || errorMessage;
+        } catch {
+          errorMessage = `Server returned ${res.status}: ${res.statusText}`;
+        }
+        throw new Error(errorMessage);
       }
       
       const data = await res.json();
       document.cookie = `sp_session=${data.token}; Max-Age=${60 * 60 * 24 * 30}; Path=/`;
       router.replace("/dashboard");
     } catch (error) {
-      setErr(error instanceof Error ? error.message : "Login failed. Please try again.");
+      let errorMessage = "Login failed. Please try again.";
+      
+      if (error instanceof TypeError && error.message === "Failed to fetch") {
+        errorMessage = `Cannot connect to server at ${API_BASE_URL}. Please make sure the backend is running.`;
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
+      console.error("Login error:", error);
+      setErr(errorMessage);
     } finally {
       setLoading(false);
     }
