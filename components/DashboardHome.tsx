@@ -6,9 +6,10 @@ import Image from "next/image";
 import type { Route } from "next";
 import { useMemo, useState, useEffect } from "react";
 import { type PantryItem } from "@/data/pantry-items";
-import { getItems, backendItemToFrontend } from "@/lib/api";
+import { getItems, getItem, backendItemToFrontend, updateItem, deleteItem, type BackendItem } from "@/lib/api";
 import { useOptimisticItems } from "@/lib/hooks/useOptimisticItems";
 import AddItemModal from "./AddItemModal";
+import EditItemModal from "./EditItemModal";
 import ReceiptScannerModal from "./ReceiptScannerModal";
 
 type Item = PantryItem;
@@ -30,6 +31,10 @@ export default function DashboardHome() {
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<BackendItem | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Fetch items from API
   const fetchItems = async () => {
@@ -81,6 +86,54 @@ export default function DashboardHome() {
     isPending,
     pendingId,
   } = useOptimisticItems(items, setItems, fetchItems);
+
+  // Handle edit item
+  const handleEditItem = async (item: Item) => {
+    try {
+      // Fetch full item data from API
+      const fullItem = await getItem(item.id);
+      setEditingItem(fullItem);
+      setShowEditModal(true);
+    } catch (err) {
+      console.error("Error fetching item details:", err);
+      alert(err instanceof Error ? err.message : "Failed to load item details");
+    }
+  };
+
+  // Handle update item
+  const handleUpdateItem = async (itemId: string, itemData: { name?: string; quantity?: number; expiration_date?: string | null }) => {
+    try {
+      await optimisticUpdate(itemId, itemData);
+      setShowEditModal(false);
+      setEditingItem(null);
+    } catch (err) {
+      throw err; // Error is handled in EditItemModal
+    }
+  };
+
+  // Handle delete item
+  const handleDeleteClick = (itemId: string) => {
+    setDeletingItemId(itemId);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingItemId) return;
+    
+    try {
+      await optimisticDelete(deletingItemId);
+      setShowDeleteConfirm(false);
+      setDeletingItemId(null);
+    } catch (err) {
+      console.error("Error deleting item:", err);
+      alert(err instanceof Error ? err.message : "Failed to delete item");
+    }
+  };
+
+  const handleCancelDelete = () => {
+    setShowDeleteConfirm(false);
+    setDeletingItemId(null);
+  };
 
   // Expose optimistic functions (can be used by child components or buttons)
   // For now, these are available but not used in this component
@@ -226,13 +279,37 @@ export default function DashboardHome() {
                         />
                         <span className="font-medium text-sm sm:text-base truncate">{i.name}</span>
                       </div>
-                      <span className="text-xs text-slate-500 flex-shrink-0">
-                        {i.status === "expired"
-                          ? "expired"
-                          : typeof i.expiresInDays === "number"
-                            ? `${i.expiresInDays}d`
-                            : ""}
-                      </span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-xs text-slate-500">
+                          {i.status === "expired"
+                            ? "expired"
+                            : typeof i.expiresInDays === "number"
+                              ? `${i.expiresInDays}d`
+                              : ""}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleEditItem(i)}
+                            disabled={isPending}
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Edit item"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteClick(i.id)}
+                            disabled={isPending}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Delete item"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ))
                 )}
@@ -288,6 +365,52 @@ export default function DashboardHome() {
             isOpen={showScanModal}
             onClose={() => setShowScanModal(false)}
           />
+
+          {/* Edit Item Modal */}
+          <EditItemModal
+            isOpen={showEditModal}
+            onClose={() => {
+              setShowEditModal(false);
+              setEditingItem(null);
+            }}
+            onUpdate={handleUpdateItem}
+            item={editingItem}
+            isPending={isPending}
+          />
+
+          {/* Delete Confirmation Dialog */}
+          {showDeleteConfirm && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+              onClick={handleCancelDelete}
+            >
+              <div
+                className="bg-white rounded-lg shadow-xl w-full max-w-md p-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold text-gray-800 mb-2">Delete Item</h3>
+                <p className="text-gray-600 mb-6">
+                  Are you sure you want to delete this item? This action cannot be undone.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleCancelDelete}
+                    disabled={isPending}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmDelete}
+                    disabled={isPending}
+                    className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isPending ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
