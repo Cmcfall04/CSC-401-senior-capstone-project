@@ -381,6 +381,39 @@ export async function getProfileStats(): Promise<ProfileStats> {
   return response.json();
 }
 
+// Expiration suggestion types
+export interface ExpirationSuggestionRequest {
+  name: string;
+  storage_type?: string;
+  purchased_date?: string | null;
+}
+
+export interface ExpirationSuggestionResponse {
+  suggested_date: string | null;
+  days_from_now: number | null;
+  confidence: "high" | "medium" | "low";
+  category: string | null;
+}
+
+export async function suggestExpirationDate(
+  request: ExpirationSuggestionRequest
+): Promise<ExpirationSuggestionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/items/suggest-expiration`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to suggest expiration" }));
+    throw new Error(error.detail || "Failed to suggest expiration");
+  }
+
+  return response.json();
+}
+
 // Helper to convert backend item to frontend format
 export function backendItemToFrontend(item: BackendItem) {
   const today = new Date();

@@ -6,7 +6,7 @@ import re
 import time
 import httpx
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response, Query
@@ -89,6 +89,17 @@ class ProfileResponse(BaseModel):
 class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
+
+class ExpirationSuggestionRequest(BaseModel):
+    name: str
+    storage_type: Optional[str] = None  # "pantry", "fridge", "freezer"
+    purchased_date: Optional[date] = None
+
+class ExpirationSuggestionResponse(BaseModel):
+    suggested_date: Optional[str]  # ISO date string
+    days_from_now: Optional[int]
+    confidence: str  # "high", "medium", "low"
+    category: Optional[str] = None
 
 class ItemResponse(BaseModel):
     id: str
@@ -603,6 +614,156 @@ def get_expiring_items(
     except Exception as e:
         logger.error(f"Error fetching expiring items for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# Expiration suggestion rules (in days from purchase/current date)
+# Based on common food shelf life guidelines
+EXPIRATION_RULES = {
+    # Dairy products (refrigerated)
+    "dairy": {
+        "keywords": ["milk", "cream", "yogurt", "cheese", "butter", "sour cream", "cottage cheese"],
+        "pantry": None,  # Not typically stored in pantry
+        "fridge": 7,  # 7 days
+        "freezer": 90,  # 3 months
+    },
+    # Meat & Poultry (refrigerated)
+    "meat": {
+        "keywords": ["chicken", "beef", "pork", "turkey", "lamb", "steak", "ground", "sausage", "bacon", "ham"],
+        "pantry": None,
+        "fridge": 3,  # 3 days
+        "freezer": 180,  # 6 months
+    },
+    # Seafood
+    "seafood": {
+        "keywords": ["fish", "salmon", "tuna", "shrimp", "crab", "lobster", "seafood"],
+        "pantry": None,
+        "fridge": 2,  # 2 days
+        "freezer": 90,  # 3 months
+    },
+    # Produce - Perishable
+    "produce_perishable": {
+        "keywords": ["lettuce", "spinach", "kale", "broccoli", "carrots", "celery", "bell pepper", "cucumber", "tomato", "berries", "grapes"],
+        "pantry": None,
+        "fridge": 7,  # 7 days
+        "freezer": 30,  # 1 month (if frozen)
+    },
+    # Produce - Longer lasting
+    "produce_long": {
+        "keywords": ["potato", "onion", "garlic", "apple", "orange", "banana"],
+        "pantry": 30,  # 30 days
+        "fridge": 14,  # 14 days
+        "freezer": 90,  # 3 months
+    },
+    # Bread & Bakery
+    "bread": {
+        "keywords": ["bread", "bagel", "muffin", "roll", "bun", "croissant"],
+        "pantry": 5,  # 5 days
+        "fridge": 7,  # 7 days
+        "freezer": 90,  # 3 months
+    },
+    # Eggs
+    "eggs": {
+        "keywords": ["egg", "eggs"],
+        "pantry": None,
+        "fridge": 21,  # 3 weeks
+        "freezer": None,  # Not typically frozen
+    },
+    # Canned goods
+    "canned": {
+        "keywords": ["can", "canned", "soup", "beans", "corn", "peas", "tuna can"],
+        "pantry": 365,  # 1 year
+        "fridge": 365,  # Same after opening
+        "freezer": None,
+    },
+    # Dry goods
+    "dry": {
+        "keywords": ["pasta", "rice", "flour", "sugar", "cereal", "oats", "quinoa", "lentils", "beans dry"],
+        "pantry": 365,  # 1 year
+        "fridge": 365,
+        "freezer": 365,
+    },
+    # Snacks & Packaged
+    "packaged": {
+        "keywords": ["chips", "crackers", "cookies", "nuts", "pretzels", "popcorn"],
+        "pantry": 90,  # 3 months
+        "fridge": 90,
+        "freezer": 180,  # 6 months
+    },
+    # Beverages
+    "beverages": {
+        "keywords": ["juice", "soda", "water", "coffee", "tea"],
+        "pantry": 180,  # 6 months (unopened)
+        "fridge": 7,  # 7 days (opened)
+        "freezer": None,
+    },
+}
+
+def suggest_expiration_date(item_name: str, storage_type: str = "pantry", purchased_date: Optional[date] = None) -> tuple[Optional[date], str, Optional[str]]:
+    """
+    Suggest expiration date based on item name and storage type.
+    Returns: (suggested_date, confidence, category)
+    """
+    item_name_lower = item_name.lower()
+    today = purchased_date if purchased_date else date.today()
+    
+    # Try to match item name to a category
+    matched_category = None
+    matched_days = None
+    
+    for category, rules in EXPIRATION_RULES.items():
+        for keyword in rules["keywords"]:
+            if keyword in item_name_lower:
+                matched_category = category
+                # Get days based on storage type
+                if storage_type == "freezer" and rules["freezer"] is not None:
+                    matched_days = rules["freezer"]
+                elif storage_type == "fridge" and rules["fridge"] is not None:
+                    matched_days = rules["fridge"]
+                elif storage_type == "pantry" and rules["pantry"] is not None:
+                    matched_days = rules["pantry"]
+                
+                if matched_days is not None:
+                    break
+        
+        if matched_days is not None:
+            break
+    
+    # Determine confidence level
+    if matched_days is not None:
+        # High confidence if we found a match
+        confidence = "high"
+        suggested_date = today + timedelta(days=matched_days)
+        return suggested_date, confidence, matched_category
+    else:
+        # Low confidence - no match found, use default
+        confidence = "low"
+        # Default: 7 days for unknown items (conservative estimate)
+        suggested_date = today + timedelta(days=7)
+        return suggested_date, confidence, None
+
+@app.post("/api/items/suggest-expiration", response_model=ExpirationSuggestionResponse)
+def suggest_expiration(request: ExpirationSuggestionRequest):
+    """
+    Suggest an expiration date for an item based on its name and storage type.
+    """
+    try:
+        storage = request.storage_type or "pantry"
+        suggested_date, confidence, category = suggest_expiration_date(
+            request.name,
+            storage,
+            request.purchased_date
+        )
+        
+        days_from_now = (suggested_date - date.today()).days if suggested_date else None
+        
+        return {
+            "suggested_date": suggested_date.isoformat() if suggested_date else None,
+            "days_from_now": days_from_now,
+            "confidence": confidence,
+            "category": category
+        }
+    except Exception as e:
+        logger.error(f"Error suggesting expiration date: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error suggesting expiration: {str(e)}")
 
 # Profile/Account endpoints
 @app.get("/api/profile", response_model=ProfileResponse)

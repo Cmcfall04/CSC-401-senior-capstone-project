@@ -3,7 +3,8 @@
 
 "use client";
 
-import { useState, FormEvent, useEffect } from "react";
+import { useState, FormEvent, useEffect, useCallback } from "react";
+import { suggestExpirationDate } from "@/lib/api";
 
 interface AddItemModalProps {
   isOpen: boolean;
@@ -23,10 +24,45 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
   const [selectedFood, setSelectedFood] = useState<any>(null);
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [suggestingExpiration, setSuggestingExpiration] = useState(false);
+  const [suggestedExpiration, setSuggestedExpiration] = useState<string | null>(null);
+  const [expirationConfidence, setExpirationConfidence] = useState<"high" | "medium" | "low" | null>(null);
 
+  // Fetch expiration suggestion function
+  const fetchExpirationSuggestion = useCallback(async (itemName: string) => {
+    if (!itemName.trim()) return;
+    
+    try {
+      setSuggestingExpiration(true);
+      const suggestion = await suggestExpirationDate({
+        name: itemName.trim(),
+        storage_type: "pantry", // Default to pantry, can be enhanced later
+      });
+      
+      if (suggestion.suggested_date) {
+        setSuggestedExpiration(suggestion.suggested_date);
+        setExpirationConfidence(suggestion.confidence);
+        
+        // Auto-fill expiration date if it's empty or if confidence is high
+        setExpirationDate((currentDate) => {
+          if (!currentDate || suggestion.confidence === "high") {
+            return suggestion.suggested_date;
+          }
+          return currentDate;
+        });
+      }
+    } catch (err) {
+      console.error("Error fetching expiration suggestion:", err);
+      // Silently fail - don't show error to user, just don't suggest
+    } finally {
+      setSuggestingExpiration(false);
+    }
+  }, []);
 
   // Debounced USDA search
   useEffect(() => {
+    if (!isOpen) return; // Don't search if modal is closed
+    
     if (searchQuery.length < 3) {
       setSearchResults([]);
       setShowResults(false);
@@ -49,7 +85,25 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, isOpen]);
+
+  // Fetch expiration suggestion when name changes
+  useEffect(() => {
+    if (!isOpen) return; // Don't suggest if modal is closed
+    
+    // Only suggest if name is manually entered (not from food search) and has at least 3 characters
+    if (name.trim().length >= 3 && !selectedFood) {
+      const timer = setTimeout(() => {
+        fetchExpirationSuggestion(name);
+      }, 500); // Debounce
+
+      return () => clearTimeout(timer);
+    } else if (!name.trim()) {
+      // Clear suggestion if name is cleared
+      setSuggestedExpiration(null);
+      setExpirationConfidence(null);
+    }
+  }, [name, selectedFood, isOpen, fetchExpirationSuggestion]);
 
   if (!isOpen) return null;
 
@@ -98,6 +152,11 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
       setQuantity("1");
       setExpirationDate("");
       setError(null);
+      setSuggestedExpiration(null);
+      setExpirationConfidence(null);
+      setSelectedFood(null);
+      setSearchQuery("");
+      setSearchResults([]);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create item");
@@ -116,15 +175,22 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
       setSearchResults([]);
       setSelectedFood(null);
       setShowResults(false);
+      setSuggestedExpiration(null);
+      setExpirationConfidence(null);
       onClose();
     }
   };
 
   const handleSelectFood = (food: any) => {
     setSelectedFood(food);
-    setName(food.description || food.name || "");
-    setSearchQuery(food.description || food.name || "");
+    const foodName = food.description || food.name || "";
+    setName(foodName);
+    setSearchQuery(foodName);
     setShowResults(false);
+    // Suggest expiration for selected food
+    if (foodName.trim()) {
+      fetchExpirationSuggestion(foodName);
+    }
   };
 
   // Get today's date in YYYY-MM-DD format for the date input min attribute
@@ -248,19 +314,48 @@ export default function AddItemModal({ isOpen, onClose, onCreate, isPending = fa
           <div>
             <label htmlFor="expiration-date" className="block text-sm font-medium text-gray-700 mb-1">
               Expiration Date <span className="text-gray-500 text-xs">(optional)</span>
+              {suggestingExpiration && (
+                <span className="ml-2 text-xs text-blue-600">Suggesting...</span>
+              )}
             </label>
-            <input
-              id="expiration-date"
-              type="date"
-              value={expirationDate}
-              onChange={(e) => setExpirationDate(e.target.value)}
-              min={today}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-colors"
-              disabled={submitting || isPending}
-            />
+            <div className="relative">
+              <input
+                id="expiration-date"
+                type="date"
+                value={expirationDate}
+                onChange={(e) => setExpirationDate(e.target.value)}
+                min={today}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-colors"
+                disabled={submitting || isPending}
+              />
+              {suggestedExpiration && expirationDate === suggestedExpiration && expirationConfidence && (
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="text-xs text-green-600">
+                    ✓ Suggested expiration
+                  </span>
+                  {expirationConfidence === "high" && (
+                    <span className="text-xs text-green-700 font-medium">(High confidence)</span>
+                  )}
+                  {expirationConfidence === "low" && (
+                    <span className="text-xs text-yellow-600">(Estimate - you may want to adjust)</span>
+                  )}
+                </div>
+              )}
+            </div>
             <p className="text-xs text-gray-500 mt-1">
-              Leave empty for non-perishable items
+              {suggestedExpiration && expirationDate !== suggestedExpiration
+                ? `Suggested: ${new Date(suggestedExpiration).toLocaleDateString()} - Click to use`
+                : "Leave empty for non-perishable items"}
             </p>
+            {suggestedExpiration && expirationDate !== suggestedExpiration && (
+              <button
+                type="button"
+                onClick={() => setExpirationDate(suggestedExpiration)}
+                className="mt-1 text-xs text-blue-600 hover:text-blue-700 underline"
+              >
+                Use suggested date
+              </button>
+            )}
           </div>
 
           {/* Error Message */}
