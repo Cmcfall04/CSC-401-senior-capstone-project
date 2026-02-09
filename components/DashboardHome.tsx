@@ -30,6 +30,27 @@ export default function DashboardHome() {
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [households, setHouseholds] = useState<Array<{id: string, name: string}>>([]);
+  const [selectedHousehold, setSelectedHousehold] = useState<string | null>(null);
+
+  // Fetch households
+  const fetchHouseholds = async () => {
+    try {
+      const token = document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/households`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHouseholds(data.households || []);
+        if (data.households && data.households.length > 0) {
+          setSelectedHousehold(data.households[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load households:', err);
+    }
+  };
 
   // Fetch items from API
   const fetchItems = async () => {
@@ -40,6 +61,7 @@ export default function DashboardHome() {
       const response = await getItems({
         sort_by: sort === "expires" ? "expiration_date" : "created_at",
         sort_order: "desc",
+        household_id: selectedHousehold || undefined,
       });
       
       // Ensure response has items array
@@ -61,8 +83,14 @@ export default function DashboardHome() {
   };
 
   useEffect(() => {
-    fetchItems();
-  }, [sort]); // Re-fetch when sort changes
+    fetchHouseholds();
+  }, []);
+  
+  useEffect(() => {
+    if (selectedHousehold) {
+      fetchItems();
+    }
+  }, [sort, selectedHousehold]);
 
   // Listen for refresh events (from optimistic updates)
   useEffect(() => {
@@ -122,6 +150,25 @@ export default function DashboardHome() {
         </div>
         <h1 className="text-xl sm:text-3xl font-semibold">SmartPantry</h1>
         <p className="text-xs sm:text-base text-slate-600 px-2">Welcome back! Here&apos;s a quick look at your pantry.</p>
+        
+        {/* Household Selector */}
+        {households.length > 0 && (
+          <div className="flex items-center justify-center gap-2 mt-2">
+            <label className="text-sm font-medium text-slate-700">Viewing:</label>
+            <select
+              value={selectedHousehold || ""}
+              onChange={(e) => setSelectedHousehold(e.target.value)}
+              className="border border-slate-300 rounded-lg px-4 py-2 text-sm bg-white font-medium text-slate-800 hover:border-green-500 focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-colors"
+              disabled={loading}
+            >
+              {households.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
       <section className="grid gap-3 sm:gap-4 md:grid-cols-3">
