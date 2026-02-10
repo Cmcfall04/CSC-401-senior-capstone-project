@@ -1,21 +1,14 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import UnderConstruction from "@/components/UnderConstruction";
+import RecipesPage from "@/components/RecipesPage";
 
-export default async function RecipesPage() {
-  // Check if user is logged in
+export default async function Page() {
   const cookieStore = await cookies();
   const session = cookieStore.get("sp_session");
-  
-  // Redirect to login if not authenticated
+
   if (!session) {
     redirect("/login");
   }
 
-  return (
-    <div className="grid gap-4">
-      <h1 className="text-2xl font-semibold">Recipes</h1>
-      <UnderConstruction note="Integration with Spoonacular API coming soon." />
-    </div>
-  );
+  return <RecipesPage />;
 }

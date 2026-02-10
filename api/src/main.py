@@ -5,13 +5,14 @@ import json
 import re
 import time
 import httpx
-from datetime import date, datetime
+import uuid
+from datetime import date, datetime, timedelta
 from uuid import UUID
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from supabase import create_client, Client
 from fastapi import UploadFile, File
 
@@ -29,6 +30,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 USDA_API_KEY = os.getenv("USDA_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SPOONACULAR_API_KEY = os.getenv("SPOONACULAR_API_KEY")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL environment variable is required")
@@ -42,6 +44,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # Initialize the Openai client w/ key
 from openai import OpenAI
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# In-memory store for scan sessions (in production, use Redis or database)
+scan_sessions: Dict[str, Dict] = {}
 
 # Configure logging
 logging.basicConfig(
@@ -86,6 +91,20 @@ class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
 
+class ExpirationSuggestionRequest(BaseModel):
+    name: str
+    storage_type: Optional[str] = None  # "pantry", "fridge", "freezer"
+    purchased_date: Optional[date] = None
+
+class ExpirationSuggestionResponse(BaseModel):
+    suggested_date: Optional[str]  # ISO date string
+    days_from_now: Optional[int]
+    confidence: str  # "high", "medium", "low"
+    category: Optional[str] = None
+
+class JoinHouseholdRequest(BaseModel):
+    household_id: str
+
 class ItemResponse(BaseModel):
     id: str
     user_id: str
@@ -110,14 +129,52 @@ app = FastAPI(
 )
 
 # CORS configuration
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+
+# For development, also allow common localhost ports and local network IPs
+if os.getenv("NODE_ENV", "development") == "development":
+    common_ports = ["3000", "3001", "3002", "5173", "5174"]  # Common dev server ports
+    for port in common_ports:
+        origins_to_add = [
+            f"http://localhost:{port}",
+            f"http://127.0.0.1:{port}",
+        ]
+        for origin in origins_to_add:
+            if origin not in allowed_origins:
+                allowed_origins.append(origin)
+    
+    # Allow all local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) for mobile access
+    # This is a regex pattern that will match any local IP
+    import re
+    local_ip_pattern = re.compile(r'^http://(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)')
+    
+    # We'll use a custom CORS handler that checks for local IPs
+    # For now, allow all origins in development (you can restrict this in production)
+    logger.info("Development mode: Allowing all local network origins for mobile access")
+
+# In development, allow local network IPs using regex pattern
+if os.getenv("NODE_ENV", "development") == "development":
+    # Regex pattern to match local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost)
+    local_network_regex = r"http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(:\d+)?"
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_origin_regex=local_network_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info("Development mode: Allowing local network IPs via regex pattern")
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Request logging middleware
 @app.middleware("http")
@@ -191,17 +248,35 @@ def startup():
     """Initialize application on startup"""
     logger.info("Starting Smart Pantry API...")
     logger.info(f"Supabase URL: {SUPABASE_URL[:30]}...")  # Log partial URL for security
+    logger.info(f"CORS allowed origins: {allowed_origins}")
+    logger.info(f"API listening on: http://0.0.0.0:8000")
+    
+    try:
+        logger.info("Testing Supabase connection...")
+        # Simple test query
+        result = supabase.table("profiles").select("id").limit(1).execute()
+        logger.info("✓ Supabase connection successful")
+    except Exception as e:
+        logger.error(f"✗ Supabase connection failed: {e}")
+    
     logger.info("API startup complete. Ready to handle requests.")
+
+@app.get("/test")
+def test_endpoint():
+    logger.info("TEST ENDPOINT CALLED")
+    return {"message": "Server is working!"}
 
 # Authentication endpoints
 @app.post("/auth/signup")
 def signup(req: SignupRequest):
     """Sign up a new user using Supabase Auth"""
+    print(f"SIGNUP STARTED for {req.email}")
     logger.info(f"Signup attempt for email: {req.email}")
     try:
         # Create user in Supabase Auth with email confirmation disabled for development
         # Using admin API to create user directly (bypasses email confirmation)
         try:
+            print("Trying admin API...")
             # First, try to create user using admin API (auto-confirms email)
             admin_response = supabase.auth.admin.create_user({
                 "email": req.email,
@@ -211,12 +286,30 @@ def signup(req: SignupRequest):
                     "name": req.name
                 }
             })
-            
             if not admin_response.user:
                 raise HTTPException(status_code=400, detail="Failed to create user")
             
             user_id = str(admin_response.user.id)
+            print(f"Admin user created: {user_id}")
+            logger.info("Admin user created successfully")
+
+            # Create household for admin user
+            print("Creating household...")
+            household_result = supabase.table("household").insert({
+                "name": f"{req.name}'s Household"
+            }).execute()
+            print(f"Household created: {household_result.data}")
+
+            household_id = household_result.data[0]["id"]
+            print(f"Creating relation for household {household_id}...")
+            supabase.table("relation_househould").insert({
+                "user_id": user_id,
+                "household_id": household_id
+            }).execute()
+            print("Relation created successfully")
+
         except Exception as admin_error:
+            print(f"Admin API failed: {admin_error}")
             # Fallback to regular sign_up if admin API fails
             auth_response = supabase.auth.sign_up({
                 "email": req.email,
@@ -232,6 +325,8 @@ def signup(req: SignupRequest):
                 raise HTTPException(status_code=400, detail="Failed to create user")
             
             user_id = str(auth_response.user.id)
+            print(f"Fallback user created: {user_id}")
+            logger.info("Fallback user created successfully")
             
             # If user was created but not confirmed, try to confirm them
             try:
@@ -241,8 +336,23 @@ def signup(req: SignupRequest):
                 )
             except:
                 pass  # If we can't auto-confirm, user will need to confirm via email
+            
+            # Create household for fallback user
+            print("Creating household (fallback)...")
+            household_result = supabase.table("household").insert({
+                "name": f"{req.name}'s Household"
+            }).execute()
+            print(f"Household created (fallback): {household_result.data}")
+            
+            household_id = household_result.data[0]["id"]
+            print(f"Creating relation for household {household_id} (fallback)...")
+            supabase.table("relation_househould").insert({
+                "user_id": user_id,
+                "household_id": household_id
+            }).execute()
+            print("Relation created successfully (fallback)")
         
-        # Create profile in profiles table (trigger should handle this, but ensure it exists)
+        # Create profile (trigger should handle this, but ensure it exists)
         try:
             supabase.table("profiles").insert({
                 "id": user_id,
@@ -250,12 +360,12 @@ def signup(req: SignupRequest):
                 "email": req.email
             }).execute()
         except Exception as e:
-            # Profile might already exist from trigger, that's okay
-            pass
+            logger.warning(f"Profile creation warning (expected): {str(e)}")
         
         # Return token (using user_id as token for now)
         logger.info(f"Signup successful for user: {user_id} ({req.email})")
         return {
+
             "token": user_id,
             "user": {
                 "id": user_id,
@@ -268,6 +378,8 @@ def signup(req: SignupRequest):
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Signup failed for email: {req.email} - {error_msg}")
+        print(f"FULL ERROR: {repr(e)}")
+        print(f"ERROR TYPE: {type(e).__name__}")
         if "already registered" in error_msg.lower() or "user already exists" in error_msg.lower():
             raise HTTPException(status_code=400, detail="User already exists")
         raise HTTPException(status_code=500, detail=f"Signup failed: {error_msg}")
@@ -282,16 +394,16 @@ def login(req: LoginRequest):
             "email": req.email,
             "password": req.password
         })
-        
+
         if not auth_response.user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        
+
         user_id = str(auth_response.user.id)
-        
+
         # Get user profile
         profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
         profile = profile_response.data[0] if profile_response.data else None
-        
+
         # Return token (using user_id as token for now)
         logger.info(f"Login successful for user: {user_id} ({req.email})")
         return {
@@ -313,20 +425,12 @@ def login(req: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid email or password")
         raise HTTPException(status_code=500, detail=f"Login failed: {error_msg}")
 
-# Health check endpoint
-@app.get("/health")
-def health():
-    try:
-        # Test Supabase connection
-        result = supabase.table("items").select("id").limit(1).execute()
-        return {"ok": True, "database": "connected", "supabase": "ready"}
-    except Exception as e:
-        return {"ok": True, "database": "error", "error": str(e)}
 
 # Items endpoints
 @app.get("/api/items", response_model=PaginatedItemsResponse)
 def list_items(
     user_id: Optional[str] = Depends(get_user_id),
+    household_id: Optional[str] = Query(None, description="Filter by household ID"),
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
     page_size: int = Query(50, ge=1, le=100, description="Number of items per page (max 100)"),
     search: Optional[str] = Query(None, description="Search items by name"),
@@ -334,14 +438,33 @@ def list_items(
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     expiring_soon: Optional[bool] = Query(None, description="Filter items expiring within 7 days"),
 ):
-    """Get all items for the authenticated user with pagination, filtering, and sorting"""
+    """Get all items for the authenticated user's household with pagination, filtering, and sorting"""
     if not user_id:
         logger.warning("GET /api/items - Authentication required")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     try:
-        # Build query
-        query = supabase.table("items").select("*", count="exact").eq("user_id", user_id)
+        # Use provided household_id or get user's first household
+        if household_id:
+            # Verify user is in this household
+            member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+            if not member_check.data:
+                raise HTTPException(status_code=403, detail="Not a member of this household")
+            target_household_id = household_id
+        else:
+            # Get user's first household
+            household_response = supabase.table("relation_househould").select("household_id").eq("user_id", user_id).limit(1).execute()
+            if not household_response.data:
+                logger.warning(f"No household found for user {user_id}")
+                return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+            target_household_id = household_response.data[0]["household_id"]
+        
+        # Get all user_ids in the household
+        members_response = supabase.table("relation_househould").select("user_id").eq("household_id", target_household_id).execute()
+        user_ids = [m["user_id"] for m in members_response.data]
+        
+        # Build query for items from all household members
+        query = supabase.table("items").select("*", count="exact").in_("user_id", user_ids)
         
         # Apply search filter (name contains search term)
         if search:
@@ -560,6 +683,156 @@ def get_expiring_items(
         logger.error(f"Error fetching expiring items for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+# Expiration suggestion rules (in days from purchase/current date)
+# Based on common food shelf life guidelines
+EXPIRATION_RULES = {
+    # Dairy products (refrigerated)
+    "dairy": {
+        "keywords": ["milk", "cream", "yogurt", "cheese", "butter", "sour cream", "cottage cheese"],
+        "pantry": None,  # Not typically stored in pantry
+        "fridge": 7,  # 7 days
+        "freezer": 90,  # 3 months
+    },
+    # Meat & Poultry (refrigerated)
+    "meat": {
+        "keywords": ["chicken", "beef", "pork", "turkey", "lamb", "steak", "ground", "sausage", "bacon", "ham"],
+        "pantry": None,
+        "fridge": 3,  # 3 days
+        "freezer": 180,  # 6 months
+    },
+    # Seafood
+    "seafood": {
+        "keywords": ["fish", "salmon", "tuna", "shrimp", "crab", "lobster", "seafood"],
+        "pantry": None,
+        "fridge": 2,  # 2 days
+        "freezer": 90,  # 3 months
+    },
+    # Produce - Perishable
+    "produce_perishable": {
+        "keywords": ["lettuce", "spinach", "kale", "broccoli", "carrots", "celery", "bell pepper", "cucumber", "tomato", "berries", "grapes"],
+        "pantry": None,
+        "fridge": 7,  # 7 days
+        "freezer": 30,  # 1 month (if frozen)
+    },
+    # Produce - Longer lasting
+    "produce_long": {
+        "keywords": ["potato", "onion", "garlic", "apple", "orange", "banana"],
+        "pantry": 30,  # 30 days
+        "fridge": 14,  # 14 days
+        "freezer": 90,  # 3 months
+    },
+    # Bread & Bakery
+    "bread": {
+        "keywords": ["bread", "bagel", "muffin", "roll", "bun", "croissant"],
+        "pantry": 5,  # 5 days
+        "fridge": 7,  # 7 days
+        "freezer": 90,  # 3 months
+    },
+    # Eggs
+    "eggs": {
+        "keywords": ["egg", "eggs"],
+        "pantry": None,
+        "fridge": 21,  # 3 weeks
+        "freezer": None,  # Not typically frozen
+    },
+    # Canned goods
+    "canned": {
+        "keywords": ["can", "canned", "soup", "beans", "corn", "peas", "tuna can"],
+        "pantry": 365,  # 1 year
+        "fridge": 365,  # Same after opening
+        "freezer": None,
+    },
+    # Dry goods
+    "dry": {
+        "keywords": ["pasta", "rice", "flour", "sugar", "cereal", "oats", "quinoa", "lentils", "beans dry"],
+        "pantry": 365,  # 1 year
+        "fridge": 365,
+        "freezer": 365,
+    },
+    # Snacks & Packaged
+    "packaged": {
+        "keywords": ["chips", "crackers", "cookies", "nuts", "pretzels", "popcorn"],
+        "pantry": 90,  # 3 months
+        "fridge": 90,
+        "freezer": 180,  # 6 months
+    },
+    # Beverages
+    "beverages": {
+        "keywords": ["juice", "soda", "water", "coffee", "tea"],
+        "pantry": 180,  # 6 months (unopened)
+        "fridge": 7,  # 7 days (opened)
+        "freezer": None,
+    },
+}
+
+def suggest_expiration_date(item_name: str, storage_type: str = "pantry", purchased_date: Optional[date] = None) -> tuple[Optional[date], str, Optional[str]]:
+    """
+    Suggest expiration date based on item name and storage type.
+    Returns: (suggested_date, confidence, category)
+    """
+    item_name_lower = item_name.lower()
+    today = purchased_date if purchased_date else date.today()
+    
+    # Try to match item name to a category
+    matched_category = None
+    matched_days = None
+    
+    for category, rules in EXPIRATION_RULES.items():
+        for keyword in rules["keywords"]:
+            if keyword in item_name_lower:
+                matched_category = category
+                # Get days based on storage type
+                if storage_type == "freezer" and rules["freezer"] is not None:
+                    matched_days = rules["freezer"]
+                elif storage_type == "fridge" and rules["fridge"] is not None:
+                    matched_days = rules["fridge"]
+                elif storage_type == "pantry" and rules["pantry"] is not None:
+                    matched_days = rules["pantry"]
+                
+                if matched_days is not None:
+                    break
+        
+        if matched_days is not None:
+            break
+    
+    # Determine confidence level
+    if matched_days is not None:
+        # High confidence if we found a match
+        confidence = "high"
+        suggested_date = today + timedelta(days=matched_days)
+        return suggested_date, confidence, matched_category
+    else:
+        # Low confidence - no match found, use default
+        confidence = "low"
+        # Default: 7 days for unknown items (conservative estimate)
+        suggested_date = today + timedelta(days=7)
+        return suggested_date, confidence, None
+
+@app.post("/api/items/suggest-expiration", response_model=ExpirationSuggestionResponse)
+def suggest_expiration(request: ExpirationSuggestionRequest):
+    """
+    Suggest an expiration date for an item based on its name and storage type.
+    """
+    try:
+        storage = request.storage_type or "pantry"
+        suggested_date, confidence, category = suggest_expiration_date(
+            request.name,
+            storage,
+            request.purchased_date
+        )
+        
+        days_from_now = (suggested_date - date.today()).days if suggested_date else None
+        
+        return {
+            "suggested_date": suggested_date.isoformat() if suggested_date else None,
+            "days_from_now": days_from_now,
+            "confidence": confidence,
+            "category": category
+        }
+    except Exception as e:
+        logger.error(f"Error suggesting expiration date: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error suggesting expiration: {str(e)}")
+
 # Profile/Account endpoints
 @app.get("/api/profile", response_model=ProfileResponse)
 def get_profile(user_id: Optional[str] = Depends(get_user_id)):
@@ -723,6 +996,7 @@ def change_password(password_data: PasswordChangeRequest, user_id: Optional[str]
             )
         raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
 
+
 @app.get("/api/profile/stats")
 def get_profile_stats(user_id: Optional[str] = Depends(get_user_id)):
     """Get statistics about the user's account"""
@@ -828,6 +1102,89 @@ async def create_item_from_usda(
         logger.error(f"Error creating item from USDA for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+# Spoonacular recipe API (proxy to keep API key server-side)
+@app.get("/api/recipes/by-ingredients")
+async def get_recipes_by_ingredients(
+    user_id: Optional[str] = Depends(get_user_id),
+    ingredients: str = Query(..., description="Comma-separated list of ingredients"),
+    number: int = Query(12, ge=1, le=100, description="Number of recipes to return"),
+    ranking: int = Query(1, description="1=maximize used ingredients, 2=minimize missing"),
+    diet: Optional[str] = Query(None, description="Diet filter: vegetarian, vegan, gluten free"),
+):
+    """Get recipe suggestions from Spoonacular by pantry ingredients. Requires auth."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not SPOONACULAR_API_KEY:
+        raise HTTPException(status_code=500, detail="Recipe API not configured")
+    ingredients_clean = ",".join(s.strip() for s in ingredients.split(",") if s.strip())
+    if not ingredients_clean:
+        return {"recipes": []}
+    try:
+        if diet:
+            # complexSearch supports includeIngredients + diet
+            url = "https://api.spoonacular.com/recipes/complexSearch"
+            params = {
+                "apiKey": SPOONACULAR_API_KEY,
+                "includeIngredients": ingredients_clean,
+                "diet": diet,
+                "number": number,
+                "addRecipeInformation": "true",
+            }
+        else:
+            url = "https://api.spoonacular.com/recipes/findByIngredients"
+            params = {
+                "apiKey": SPOONACULAR_API_KEY,
+                "ingredients": ingredients_clean,
+                "number": number,
+                "ranking": ranking,
+                "ignorePantry": "true",
+            }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+        if diet:
+            results = data.get("results", [])
+        else:
+            results = data if isinstance(data, list) else []
+        if not results:
+            return {"recipes": []}
+        ids = [r["id"] for r in results]
+        # Get full recipe info (readyInMinutes, servings, sourceUrl, summary)
+        ids_param = ",".join(str(i) for i in ids[:25])
+        info_url = "https://api.spoonacular.com/recipes/informationBulk"
+        info_params = {"apiKey": SPOONACULAR_API_KEY, "ids": ids_param}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            info_resp = await client.get(info_url, params=info_params)
+            info_resp.raise_for_status()
+            info_list = info_resp.json()
+        info_by_id = {int(r["id"]): r for r in info_list}
+        recipes_out = []
+        for r in results:
+            rid = r["id"]
+            info = info_by_id.get(rid, {})
+            recipes_out.append({
+                "id": rid,
+                "title": r.get("title") or info.get("title", ""),
+                "image": r.get("image") or info.get("image"),
+                "usedIngredientCount": r.get("usedIngredientCount", 0),
+                "missedIngredientCount": r.get("missedIngredientCount", 0),
+                "missedIngredients": r.get("missedIngredients", []),
+                "readyInMinutes": info.get("readyInMinutes"),
+                "servings": info.get("servings"),
+                "sourceUrl": info.get("sourceUrl"),
+                "summary": info.get("summary"),
+            })
+        return {"recipes": recipes_out}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Spoonacular API error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=502, detail="Recipe service error")
+    except Exception as e:
+        logger.error(f"Error fetching recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching recipes: {str(e)}")
+
+
 @app.post("/api/receipt/scan")
 async def scan_receipt(
     file: UploadFile = File(...),
@@ -848,6 +1205,153 @@ async def scan_receipt(
         base64_image = base64.b64encode(image_data).decode('utf-8')
         
         logger.info(f"Receipt image received: size: {len(image_data)} bytes")
+        
+        # Call OpenAI Vision API with improved prompt
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """Extract ONLY food and beverage items from this grocery receipt.
+
+Rules:
+- Ignore prices, dates, store info, and non-food items
+- Expand common abbreviations: QTRS=quarters, LT=light, CRM=cream, ENG=english, UNC=uncured
+- Remove brand names, keep only the food type
+- Use proper capitalization
+- If quantity is unclear, use 1
+
+Return ONLY a JSON array:
+[{\"name\": \"Butter\", \"quantity\": 2}, {\"name\": \"Milk\", \"quantity\": 1}]"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500
+        )
+        
+        # Extract items from response
+        content = response.choices[0].message.content
+        logger.info(f"GPT-4 raw response: {content}")
+        
+        # Extract JSON from response (GPT sometimes adds extra text)
+        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(0)
+        else:
+            logger.error(f"No JSON array found in response: {content}")
+            raise ValueError("Could not find JSON array in response")
+        
+        items = json.loads(content)
+
+        # Insert items into database
+        added_items = []
+        for item in items:
+            new_item = {
+                "user_id": user_id,
+                "name": item.get("name", ""),
+                "quantity": item.get("quantity", 1)
+            }
+
+            # Try to get USDA data with cleaned search term
+            if USDA_API_KEY:
+                try:
+                    # Clean item name for better USDA matching
+                    search_name = item.get('name', '').lower()
+                    # Remove common abbreviations and brand-specific terms
+                    search_name = search_name.replace('qtrs', 'quarters').replace('lt', 'light').replace('crm', 'cream')
+                    search_name = search_name.replace('eng', 'english').replace('unc', 'uncured')
+                    # Remove extra spaces
+                    search_name = ' '.join(search_name.split())
+                    
+                    usda_url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={search_name}&pageSize=1&api_key={USDA_API_KEY}"
+                    async with httpx.AsyncClient() as client:
+                        usda_response = await client.get(usda_url)
+                        usda_data = usda_response.json()
+                        if usda_data.get("foods"):
+                            food = usda_data["foods"][0]
+                            fdc_id = food.get("fdcId")
+                            usda_name = food.get("description", item.get('name', ''))
+                            new_item["usda_fdc_id"] = fdc_id
+                            new_item["name"] = usda_name
+                            logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                        else:
+                            logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
+                except Exception as e:
+                    logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            result = supabase.table("items").insert(new_item).execute()
+            added_items.append(result.data[0])
+
+        logger.info(f"Added {len(added_items)} items to pantry for user {user_id}")
+        return {"items": added_items, "count": len(added_items)}
+
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse OpenAI response: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to parse receipt data")
+    except Exception as e:
+        logger.error(f"Error scanning receipt: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+
+@app.post("/api/receipt/create-session")
+async def create_scan_session(
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Create a scan session and return a token for mobile scanning"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    # Generate unique token
+    token = str(uuid.uuid4())
+    
+    # Store session
+    scan_sessions[token] = {
+        "user_id": user_id,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+        "result": None
+    }
+    
+    logger.info(f"Created scan session {token} for user {user_id}")
+    return {"token": token}
+
+
+@app.post("/api/receipt/scan-mobile")
+async def scan_receipt_mobile(
+    file: UploadFile = File(...),
+    token: str = Query(...)
+):
+    """Scan receipt from mobile device using token"""
+    if token not in scan_sessions:
+        raise HTTPException(status_code=404, detail="Invalid scan token")
+    
+    session = scan_sessions[token]
+    user_id = session["user_id"]
+    
+    if session["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Scan session already completed")
+    
+    if not openai_client:
+        raise HTTPException(status_code=500, detail="OpenAI API not configured")
+    
+    try:
+        # Read the uploaded image as bytes
+        image_data = await file.read()
+        
+        # Convert bytes to base64
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        logger.info(f"Mobile receipt image received: size: {len(image_data)} bytes for session {token}")
         
         # Call OpenAI Vision API
         response = openai_client.chat.completions.create(
@@ -925,13 +1429,329 @@ async def scan_receipt(
             result = supabase.table("items").insert(new_item).execute()
             added_items.append(result.data[0])
 
-        logger.info(f"Added {len(added_items)} items to pantry for user {user_id}")
-        return {"items": added_items, "count": len(added_items)}
-
+        logger.info(f"Added {len(added_items)} items to pantry for user {user_id} via mobile scan")
+        
+        # Update session with result
+        scan_sessions[token]["status"] = "completed"
+        scan_sessions[token]["result"] = {
+            "items": added_items,
+            "count": len(added_items)
+        }
+        scan_sessions[token]["completed_at"] = datetime.now().isoformat()
+        
+        return {"success": True, "items": added_items, "count": len(added_items)}
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse OpenAI response: {str(e)}")
+        scan_sessions[token]["status"] = "error"
+        scan_sessions[token]["result"] = {"error": "Failed to parse receipt data"}
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")
     except Exception as e:
         logger.error(f"Error scanning receipt: {str(e)}")
+        scan_sessions[token]["status"] = "error"
+        scan_sessions[token]["result"] = {"error": str(e)}
         raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+
+
+@app.get("/api/receipt/scan-result/{token}")
+async def get_scan_result(
+    token: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Get scan result by token"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if token not in scan_sessions:
+        raise HTTPException(status_code=404, detail="Scan session not found")
+    
+    session = scan_sessions[token]
+    
+    # Verify user owns this session
+    if session["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if session["status"] == "pending":
+        return {"status": "pending", "result": None}
+    
+    return {
+        "status": session["status"],
+        "result": session["result"]
+    }
+
+@app.get("/api/households")
+def get_user_households(user_id: Optional[str] = Depends(get_user_id)):
+    """Get all households the user belongs to"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        response = supabase.table("relation_househould").select("household_id, household(id, name)").eq("user_id", user_id).execute()
+        households = [{"id": r["household"]["id"], "name": r["household"]["name"]} for r in response.data if r.get("household")]
+        return {"households": households}
+    except Exception as e:
+        logger.error(f"Error fetching households for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+@app.post("/api/households")
+async def create_household(
+    name: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Create a new household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        # Check if user already has a household
+        household_response = supabase.table("household").select("*").eq("admin_id", user_id).execute()
+        if household_response.data:
+            raise HTTPException(status_code=400, detail="User already belongs to a household")
+
+        # Create new household
+        new_household = {
+            "name": name,
+            "admin_id": user_id
+        }
+        household_result = supabase.table("household").insert(new_household).execute()
+
+        # Add user to household members
+        member_data = {
+            "household_id": household_result.data[0]["id"],
+            "user_id": user_id
+        }
+        supabase.table("relation_househould").insert(member_data).execute()
+
+        logger.info(f"Household '{name}' created for user {user_id}")
+        return household_result.data[0]
+    except Exception as e:
+        logger.error(f"Error creating household for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating household: {str(e)}")
+
+@app.post("/api/households/join")
+def join_household(
+    request: JoinHouseholdRequest,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Join an existing household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Check if household exists
+        household_response = supabase.table("household").select("*").eq("id", request.household_id).execute()
+        if not household_response.data:
+            raise HTTPException(status_code=404, detail="Household not found")
+        
+        # Check if user is already in this household
+        existing = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", request.household_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail="Already in this household")
+        
+        # Add user to household
+        supabase.table("relation_househould").insert({
+            "user_id": user_id,
+            "household_id": request.household_id
+        }).execute()
+        
+        logger.info(f"User {user_id} joined household {request.household_id}")
+        return {"message": "Successfully joined household", "household_id": request.household_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error joining household: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.get("/api/households/{household_id}/members")
+def get_household_members(
+    household_id: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Get all members of a household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Verify user is in this household
+        member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this household")
+        
+        # Get all members
+        members_response = supabase.table("relation_househould").select("user_id, profiles(name, email)").eq("household_id", household_id).execute()
+        members = [{"id": m["user_id"], "name": m["profiles"]["name"], "email": m["profiles"]["email"]} for m in members_response.data if m.get("profiles")]
+        return {"members": members}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching household members: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.put("/api/households/{household_id}")
+def update_household(
+    household_id: str,
+    name: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Update household name"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Verify user is in this household
+        member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this household")
+        
+        # Update household name
+        result = supabase.table("household").update({"name": name}).eq("id", household_id).execute()
+        logger.info(f"Household {household_id} renamed to '{name}' by user {user_id}")
+        return result.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating household: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+# Admin endpoints for user management
+@app.delete("/api/admin/users/{user_email}")
+def delete_user_by_email(user_email: str):
+    """
+    Admin endpoint to delete a user by email.
+    Deletes user from Supabase Auth and all related data.
+    """
+    try:
+        # Find user by email using Supabase Auth admin API
+        # First, try to get user by email using REST API
+        import httpx
+        
+        admin_url = f"{SUPABASE_URL}/auth/v1/admin/users"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        user_id = None
+        
+        # Search for user by email
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                # Get all users (with pagination if needed)
+                response = client.get(admin_url, headers=headers, params={"per_page": 1000})
+                if response.status_code == 200:
+                    users_data = response.json()
+                    for user in users_data.get("users", []):
+                        if user.get("email") == user_email:
+                            user_id = user.get("id")
+                            break
+        except Exception as api_error:
+            logger.error(f"Error searching for user via REST API: {str(api_error)}")
+            raise HTTPException(status_code=500, detail=f"Could not search for user: {str(api_error)}")
+        
+        if not user_id:
+            raise HTTPException(status_code=404, detail=f"User with email {user_email} not found")
+        
+        user_id = str(user_id)
+        logger.info(f"Found user {user_email} with ID {user_id}, deleting...")
+        
+        # Delete user from Supabase Auth
+        try:
+            supabase.auth.admin.delete_user(user_id)
+            logger.info(f"Deleted user {user_id} from Supabase Auth")
+        except Exception as delete_error:
+            logger.error(f"Error deleting user from Auth: {str(delete_error)}")
+            raise HTTPException(status_code=500, detail=f"Could not delete user from Auth: {str(delete_error)}")
+        
+        # Clean up related data
+        try:
+            supabase.table("profiles").delete().eq("id", user_id).execute()
+            logger.info(f"Deleted profile for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete profile: {str(e)}")
+        
+        try:
+            supabase.table("relation_househould").delete().eq("user_id", user_id).execute()
+            logger.info(f"Deleted household relations for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete household relations: {str(e)}")
+        
+        try:
+            supabase.table("items").delete().eq("user_id", user_id).execute()
+            logger.info(f"Deleted items for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete items: {str(e)}")
+        
+        return {
+            "message": f"User {user_email} deleted successfully",
+            "user_id": user_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user {user_email}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting user: {str(e)}")
+
+@app.get("/api/admin/users")
+def list_all_users():
+    """
+    Admin endpoint to list all users.
+    Shows users from both Supabase Auth and profiles table.
+    """
+    try:
+        import httpx
+        
+        admin_url = f"{SUPABASE_URL}/auth/v1/admin/users"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        auth_users = []
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(admin_url, headers=headers, params={"per_page": 1000})
+                if response.status_code == 200:
+                    users_data = response.json()
+                    for user in users_data.get("users", []):
+                        auth_users.append({
+                            "id": user.get("id"),
+                            "email": user.get("email"),
+                            "created_at": user.get("created_at"),
+                            "email_confirmed": user.get("email_confirmed_at") is not None,
+                            "last_sign_in": user.get("last_sign_in_at")
+                        })
+        except Exception as api_error:
+            logger.warning(f"Could not fetch users from Auth API: {str(api_error)}")
+        
+        # Also get users from profiles table
+        try:
+            profiles = supabase.table("profiles").select("*").execute()
+            profile_users = [{"id": p["id"], "email": p["email"], "name": p["name"], "source": "profiles"} for p in profiles.data]
+        except Exception as e:
+            logger.warning(f"Could not fetch profiles: {str(e)}")
+            profile_users = []
+        
+        return {
+            "auth_users": {
+                "total": len(auth_users),
+                "users": auth_users
+            },
+            "profile_users": {
+                "total": len(profile_users),
+                "users": profile_users
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error listing users: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error listing users: {str(e)}")
+
+# Health check endpoint
+@app.get("/health")
+def health():
+    try:
+        # Test Supabase connection
+        result = supabase.table("items").select("id").limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}

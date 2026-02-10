@@ -114,6 +114,7 @@ export async function getItems(options?: {
   sort_by?: "name" | "expiration_date" | "created_at" | "quantity" | "added_at";
   sort_order?: "asc" | "desc";
   expiring_soon?: boolean;
+  household_id?: string;
 }): Promise<PaginatedItemsResponse> {
   // Build query parameters
   const params = new URLSearchParams();
@@ -123,6 +124,7 @@ export async function getItems(options?: {
   if (options?.sort_by) params.append("sort_by", options.sort_by);
   if (options?.sort_order) params.append("sort_order", options.sort_order);
   if (options?.expiring_soon !== undefined) params.append("expiring_soon", options.expiring_soon.toString());
+  if (options?.household_id) params.append("household_id", options.household_id);
 
   const url = `${API_BASE_URL}/api/items${params.toString() ? `?${params.toString()}` : ""}`;
 
@@ -168,6 +170,47 @@ export async function getItems(options?: {
   }
 
   return data;
+}
+
+// Recipe types (Spoonacular via backend proxy)
+export interface RecipeByIngredients {
+  id: number;
+  title: string;
+  image: string | null;
+  usedIngredientCount: number;
+  missedIngredientCount: number;
+  missedIngredients: Array<{ name: string; original?: string }>;
+  readyInMinutes?: number;
+  servings?: number;
+  sourceUrl?: string;
+  summary?: string;
+}
+
+export interface RecipesByIngredientsResponse {
+  recipes: RecipeByIngredients[];
+}
+
+export async function getRecipesByIngredients(options: {
+  ingredients: string;
+  number?: number;
+  ranking?: 1 | 2;
+  diet?: string | null;
+}): Promise<RecipesByIngredientsResponse> {
+  const params = new URLSearchParams();
+  params.set("ingredients", options.ingredients);
+  if (options.number != null) params.set("number", options.number.toString());
+  if (options.ranking != null) params.set("ranking", options.ranking.toString());
+  if (options.diet) params.set("diet", options.diet);
+
+  const url = `${API_BASE_URL}/api/recipes/by-ingredients?${params.toString()}`;
+  const response = await authenticatedFetch(url, { method: "GET" });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch recipes" }));
+    throw new Error(error.detail || "Failed to fetch recipes");
+  }
+
+  return response.json();
 }
 
 export async function getItem(itemId: string): Promise<BackendItem> {
@@ -376,6 +419,39 @@ export async function getProfileStats(): Promise<ProfileStats> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Failed to fetch stats" }));
     throw new Error(error.detail || "Failed to fetch stats");
+  }
+
+  return response.json();
+}
+
+// Expiration suggestion types
+export interface ExpirationSuggestionRequest {
+  name: string;
+  storage_type?: string;
+  purchased_date?: string | null;
+}
+
+export interface ExpirationSuggestionResponse {
+  suggested_date: string | null;
+  days_from_now: number | null;
+  confidence: "high" | "medium" | "low";
+  category: string | null;
+}
+
+export async function suggestExpirationDate(
+  request: ExpirationSuggestionRequest
+): Promise<ExpirationSuggestionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/items/suggest-expiration`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to suggest expiration" }));
+    throw new Error(error.detail || "Failed to suggest expiration");
   }
 
   return response.json();
