@@ -23,7 +23,15 @@ export default function AccountSettings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   
   // Active tab
-  const [activeTab, setActiveTab] = useState<"profile" | "password" | "stats">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "password" | "households" | "stats">("profile");
+  
+  // Household states
+  const [households, setHouseholds] = useState<any[]>([]);
+  const [joinHouseholdId, setJoinHouseholdId] = useState("");
+  const [joiningHousehold, setJoiningHousehold] = useState(false);
+  const [selectedHouseholdForEdit, setSelectedHouseholdForEdit] = useState<string | null>(null);
+  const [householdMembers, setHouseholdMembers] = useState<any[]>([]);
+  const [editingHouseholdName, setEditingHouseholdName] = useState("");
 
   // Load profile data
   useEffect(() => {
@@ -39,6 +47,9 @@ export default function AccountSettings() {
         setStats(statsData);
         setName(profileData.name || "");
         setEmail(profileData.email || "");
+        
+        // Load households
+        await loadHouseholds();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load account information");
       } finally {
@@ -47,6 +58,91 @@ export default function AccountSettings() {
     }
     loadData();
   }, []);
+  
+  const loadHouseholds = async () => {
+    try {
+      const token = document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/households`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHouseholds(data.households || []);
+      }
+    } catch (err) {
+      console.error('Failed to load households:', err);
+    }
+  };
+  
+  const handleJoinHousehold = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setJoiningHousehold(true);
+    setError(null);
+    setSuccess(null);
+    
+    try {
+      const token = document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/households/join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ household_id: joinHouseholdId })
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to join household');
+      }
+      
+      setSuccess('Successfully joined household!');
+      setJoinHouseholdId('');
+      await loadHouseholds();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to join household');
+    } finally {
+      setJoiningHousehold(false);
+    }
+  };
+  
+  const loadHouseholdMembers = async (householdId: string) => {
+    try {
+      const token = document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/households/${householdId}/members`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHouseholdMembers(data.members || []);
+      }
+    } catch (err) {
+      console.error('Failed to load household members:', err);
+    }
+  };
+  
+  const handleUpdateHouseholdName = async (householdId: string) => {
+    if (!editingHouseholdName.trim()) return;
+    
+    try {
+      const token = document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/households/${householdId}?name=${encodeURIComponent(editingHouseholdName)}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to update household name');
+      
+      setSuccess('Household name updated!');
+      setSelectedHouseholdForEdit(null);
+      setEditingHouseholdName('');
+      await loadHouseholds();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update household');
+    }
+  };
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,6 +238,16 @@ export default function AccountSettings() {
             }`}
           >
             Change Password
+          </button>
+          <button
+            onClick={() => setActiveTab("households")}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === "households"
+                ? "border-green-600 text-green-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
+          >
+            Households
           </button>
           <button
             onClick={() => setActiveTab("stats")}
@@ -281,6 +387,112 @@ export default function AccountSettings() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* Household Tab */}
+      {activeTab === "households" && (
+        <div className="card p-6">
+          <h2 className="text-xl font-semibold mb-4">My Households</h2>
+          
+          {/* Current Households */}
+          <div className="space-y-3 mb-6">
+            {households.length > 0 ? (
+              households.map((household) => (
+                <div key={household.id} className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    {selectedHouseholdForEdit === household.id ? (
+                      <div className="flex items-center gap-2 flex-1">
+                        <input
+                          type="text"
+                          value={editingHouseholdName}
+                          onChange={(e) => setEditingHouseholdName(e.target.value)}
+                          className="border rounded px-2 py-1 text-sm flex-1"
+                          placeholder="Household name"
+                        />
+                        <button
+                          onClick={() => handleUpdateHouseholdName(household.id)}
+                          className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedHouseholdForEdit(null);
+                            setEditingHouseholdName('');
+                          }}
+                          className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <h3 className="font-medium">{household.name}</h3>
+                          <p className="text-sm text-gray-500">ID: {household.id}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedHouseholdForEdit(household.id);
+                            setEditingHouseholdName(household.name);
+                            loadHouseholdMembers(household.id);
+                          }}
+                          className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                        >
+                          Manage
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  
+                  {/* Show members when managing */}
+                  {selectedHouseholdForEdit === household.id && householdMembers.length > 0 && (
+                    <div className="mt-3 pt-3 border-t">
+                      <h4 className="text-sm font-medium mb-2">Members:</h4>
+                      <ul className="space-y-1">
+                        {householdMembers.map((member) => (
+                          <li key={member.id} className="text-sm text-gray-600">
+                            {member.name} ({member.email})
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              <p className="text-gray-500 text-sm">You are not in any households yet.</p>
+            )}
+          </div>
+          
+          {/* Join Household Form */}
+          <div className="border-t pt-6">
+            <h3 className="text-lg font-semibold mb-3">Join a Household</h3>
+            <form onSubmit={handleJoinHousehold} className="space-y-3">
+              <div>
+                <label htmlFor="householdId" className="block text-sm font-medium text-gray-700 mb-1">
+                  Household ID
+                </label>
+                <input
+                  id="householdId"
+                  type="text"
+                  value={joinHouseholdId}
+                  onChange={(e) => setJoinHouseholdId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+                  placeholder="Enter household ID"
+                  required
+                />
+                <p className="mt-1 text-xs text-gray-500">Ask your household admin for the ID</p>
+              </div>
+              <button
+                type="submit"
+                disabled={joiningHousehold}
+                className="px-6 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {joiningHousehold ? "Joining..." : "Join Household"}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

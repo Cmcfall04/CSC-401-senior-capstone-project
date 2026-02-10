@@ -101,6 +101,9 @@ class ExpirationSuggestionResponse(BaseModel):
     confidence: str  # "high", "medium", "low"
     category: Optional[str] = None
 
+class JoinHouseholdRequest(BaseModel):
+    household_id: str
+
 class ItemResponse(BaseModel):
     id: str
     user_id: str
@@ -246,17 +249,33 @@ def startup():
     logger.info(f"Supabase URL: {SUPABASE_URL[:30]}...")  # Log partial URL for security
     logger.info(f"CORS allowed origins: {allowed_origins}")
     logger.info(f"API listening on: http://0.0.0.0:8000")
+    
+    try:
+        logger.info("Testing Supabase connection...")
+        # Simple test query
+        result = supabase.table("profiles").select("id").limit(1).execute()
+        logger.info("✓ Supabase connection successful")
+    except Exception as e:
+        logger.error(f"✗ Supabase connection failed: {e}")
+    
     logger.info("API startup complete. Ready to handle requests.")
+
+@app.get("/test")
+def test_endpoint():
+    logger.info("TEST ENDPOINT CALLED")
+    return {"message": "Server is working!"}
 
 # Authentication endpoints
 @app.post("/auth/signup")
 def signup(req: SignupRequest):
     """Sign up a new user using Supabase Auth"""
+    print(f"SIGNUP STARTED for {req.email}")
     logger.info(f"Signup attempt for email: {req.email}")
     try:
         # Create user in Supabase Auth with email confirmation disabled for development
         # Using admin API to create user directly (bypasses email confirmation)
         try:
+            print("Trying admin API...")
             # First, try to create user using admin API (auto-confirms email)
             admin_response = supabase.auth.admin.create_user({
                 "email": req.email,
@@ -266,12 +285,30 @@ def signup(req: SignupRequest):
                     "name": req.name
                 }
             })
-            
             if not admin_response.user:
                 raise HTTPException(status_code=400, detail="Failed to create user")
             
             user_id = str(admin_response.user.id)
+            print(f"Admin user created: {user_id}")
+            logger.info("Admin user created successfully")
+
+            # Create household for admin user
+            print("Creating household...")
+            household_result = supabase.table("household").insert({
+                "name": f"{req.name}'s Household"
+            }).execute()
+            print(f"Household created: {household_result.data}")
+
+            household_id = household_result.data[0]["id"]
+            print(f"Creating relation for household {household_id}...")
+            supabase.table("relation_househould").insert({
+                "user_id": user_id,
+                "household_id": household_id
+            }).execute()
+            print("Relation created successfully")
+
         except Exception as admin_error:
+            print(f"Admin API failed: {admin_error}")
             # Fallback to regular sign_up if admin API fails
             auth_response = supabase.auth.sign_up({
                 "email": req.email,
@@ -287,6 +324,8 @@ def signup(req: SignupRequest):
                 raise HTTPException(status_code=400, detail="Failed to create user")
             
             user_id = str(auth_response.user.id)
+            print(f"Fallback user created: {user_id}")
+            logger.info("Fallback user created successfully")
             
             # If user was created but not confirmed, try to confirm them
             try:
@@ -296,8 +335,23 @@ def signup(req: SignupRequest):
                 )
             except:
                 pass  # If we can't auto-confirm, user will need to confirm via email
+            
+            # Create household for fallback user
+            print("Creating household (fallback)...")
+            household_result = supabase.table("household").insert({
+                "name": f"{req.name}'s Household"
+            }).execute()
+            print(f"Household created (fallback): {household_result.data}")
+            
+            household_id = household_result.data[0]["id"]
+            print(f"Creating relation for household {household_id} (fallback)...")
+            supabase.table("relation_househould").insert({
+                "user_id": user_id,
+                "household_id": household_id
+            }).execute()
+            print("Relation created successfully (fallback)")
         
-        # Create profile in profiles table (trigger should handle this, but ensure it exists)
+        # Create profile (trigger should handle this, but ensure it exists)
         try:
             supabase.table("profiles").insert({
                 "id": user_id,
@@ -305,12 +359,12 @@ def signup(req: SignupRequest):
                 "email": req.email
             }).execute()
         except Exception as e:
-            # Profile might already exist from trigger, that's okay
-            pass
+            logger.warning(f"Profile creation warning (expected): {str(e)}")
         
         # Return token (using user_id as token for now)
         logger.info(f"Signup successful for user: {user_id} ({req.email})")
         return {
+
             "token": user_id,
             "user": {
                 "id": user_id,
@@ -323,6 +377,8 @@ def signup(req: SignupRequest):
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Signup failed for email: {req.email} - {error_msg}")
+        print(f"FULL ERROR: {repr(e)}")
+        print(f"ERROR TYPE: {type(e).__name__}")
         if "already registered" in error_msg.lower() or "user already exists" in error_msg.lower():
             raise HTTPException(status_code=400, detail="User already exists")
         raise HTTPException(status_code=500, detail=f"Signup failed: {error_msg}")
@@ -337,16 +393,16 @@ def login(req: LoginRequest):
             "email": req.email,
             "password": req.password
         })
-        
+
         if not auth_response.user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        
+
         user_id = str(auth_response.user.id)
-        
+
         # Get user profile
         profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
         profile = profile_response.data[0] if profile_response.data else None
-        
+
         # Return token (using user_id as token for now)
         logger.info(f"Login successful for user: {user_id} ({req.email})")
         return {
@@ -368,20 +424,12 @@ def login(req: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid email or password")
         raise HTTPException(status_code=500, detail=f"Login failed: {error_msg}")
 
-# Health check endpoint
-@app.get("/health")
-def health():
-    try:
-        # Test Supabase connection
-        result = supabase.table("items").select("id").limit(1).execute()
-        return {"ok": True, "database": "connected", "supabase": "ready"}
-    except Exception as e:
-        return {"ok": True, "database": "error", "error": str(e)}
 
 # Items endpoints
 @app.get("/api/items", response_model=PaginatedItemsResponse)
 def list_items(
     user_id: Optional[str] = Depends(get_user_id),
+    household_id: Optional[str] = Query(None, description="Filter by household ID"),
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
     page_size: int = Query(50, ge=1, le=100, description="Number of items per page (max 100)"),
     search: Optional[str] = Query(None, description="Search items by name"),
@@ -389,14 +437,33 @@ def list_items(
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     expiring_soon: Optional[bool] = Query(None, description="Filter items expiring within 7 days"),
 ):
-    """Get all items for the authenticated user with pagination, filtering, and sorting"""
+    """Get all items for the authenticated user's household with pagination, filtering, and sorting"""
     if not user_id:
         logger.warning("GET /api/items - Authentication required")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     try:
-        # Build query
-        query = supabase.table("items").select("*", count="exact").eq("user_id", user_id)
+        # Use provided household_id or get user's first household
+        if household_id:
+            # Verify user is in this household
+            member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+            if not member_check.data:
+                raise HTTPException(status_code=403, detail="Not a member of this household")
+            target_household_id = household_id
+        else:
+            # Get user's first household
+            household_response = supabase.table("relation_househould").select("household_id").eq("user_id", user_id).limit(1).execute()
+            if not household_response.data:
+                logger.warning(f"No household found for user {user_id}")
+                return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+            target_household_id = household_response.data[0]["household_id"]
+        
+        # Get all user_ids in the household
+        members_response = supabase.table("relation_househould").select("user_id").eq("household_id", target_household_id).execute()
+        user_ids = [m["user_id"] for m in members_response.data]
+        
+        # Build query for items from all household members
+        query = supabase.table("items").select("*", count="exact").in_("user_id", user_ids)
         
         # Apply search filter (name contains search term)
         if search:
@@ -928,6 +995,7 @@ def change_password(password_data: PasswordChangeRequest, user_id: Optional[str]
             )
         raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
 
+
 @app.get("/api/profile/stats")
 def get_profile_stats(user_id: Optional[str] = Depends(get_user_id)):
     """Get statistics about the user's account"""
@@ -1054,7 +1122,7 @@ async def scan_receipt(
         
         logger.info(f"Receipt image received: size: {len(image_data)} bytes")
         
-        # Call OpenAI Vision API
+        # Call OpenAI Vision API with improved prompt
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -1063,7 +1131,17 @@ async def scan_receipt(
                     "content": [
                         {
                             "type": "text",
-                            "text": "Extract all food items from this receipt. Return ONLY a JSON array like: [{\"name\": \"Milk\", \"quantity\": 2}, {\"name\": \"Bread\", \"quantity\": 1}]"
+                            "text": """Extract ONLY food and beverage items from this grocery receipt.
+
+Rules:
+- Ignore prices, dates, store info, and non-food items
+- Expand common abbreviations: QTRS=quarters, LT=light, CRM=cream, ENG=english, UNC=uncured
+- Remove brand names, keep only the food type
+- Use proper capitalization
+- If quantity is unclear, use 1
+
+Return ONLY a JSON array:
+[{\"name\": \"Butter\", \"quantity\": 2}, {\"name\": \"Milk\", \"quantity\": 1}]"""
                         },
                         {
                             "type": "image_url",
@@ -1140,7 +1218,6 @@ async def scan_receipt(
     except Exception as e:
         logger.error(f"Error scanning receipt: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
-
 
 @app.post("/api/receipt/create-session")
 async def create_scan_session(
@@ -1317,3 +1394,146 @@ async def get_scan_result(
         "status": session["status"],
         "result": session["result"]
     }
+
+@app.get("/api/households")
+def get_user_households(user_id: Optional[str] = Depends(get_user_id)):
+    """Get all households the user belongs to"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        response = supabase.table("relation_househould").select("household_id, household(id, name)").eq("user_id", user_id).execute()
+        households = [{"id": r["household"]["id"], "name": r["household"]["name"]} for r in response.data if r.get("household")]
+        return {"households": households}
+    except Exception as e:
+        logger.error(f"Error fetching households for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+@app.post("/api/households")
+async def create_household(
+    name: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Create a new household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        # Check if user already has a household
+        household_response = supabase.table("household").select("*").eq("admin_id", user_id).execute()
+        if household_response.data:
+            raise HTTPException(status_code=400, detail="User already belongs to a household")
+
+        # Create new household
+        new_household = {
+            "name": name,
+            "admin_id": user_id
+        }
+        household_result = supabase.table("household").insert(new_household).execute()
+
+        # Add user to household members
+        member_data = {
+            "household_id": household_result.data[0]["id"],
+            "user_id": user_id
+        }
+        supabase.table("relation_househould").insert(member_data).execute()
+
+        logger.info(f"Household '{name}' created for user {user_id}")
+        return household_result.data[0]
+    except Exception as e:
+        logger.error(f"Error creating household for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating household: {str(e)}")
+
+@app.post("/api/households/join")
+def join_household(
+    request: JoinHouseholdRequest,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Join an existing household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Check if household exists
+        household_response = supabase.table("household").select("*").eq("id", request.household_id).execute()
+        if not household_response.data:
+            raise HTTPException(status_code=404, detail="Household not found")
+        
+        # Check if user is already in this household
+        existing = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", request.household_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail="Already in this household")
+        
+        # Add user to household
+        supabase.table("relation_househould").insert({
+            "user_id": user_id,
+            "household_id": request.household_id
+        }).execute()
+        
+        logger.info(f"User {user_id} joined household {request.household_id}")
+        return {"message": "Successfully joined household", "household_id": request.household_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error joining household: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.get("/api/households/{household_id}/members")
+def get_household_members(
+    household_id: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Get all members of a household"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Verify user is in this household
+        member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this household")
+        
+        # Get all members
+        members_response = supabase.table("relation_househould").select("user_id, profiles(name, email)").eq("household_id", household_id).execute()
+        members = [{"id": m["user_id"], "name": m["profiles"]["name"], "email": m["profiles"]["email"]} for m in members_response.data if m.get("profiles")]
+        return {"members": members}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching household members: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.put("/api/households/{household_id}")
+def update_household(
+    household_id: str,
+    name: str,
+    user_id: Optional[str] = Depends(get_user_id)
+):
+    """Update household name"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Verify user is in this household
+        member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this household")
+        
+        # Update household name
+        result = supabase.table("household").update({"name": name}).eq("id", household_id).execute()
+        logger.info(f"Household {household_id} renamed to '{name}' by user {user_id}")
+        return result.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating household: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+# Health check endpoint
+@app.get("/health")
+def health():
+    try:
+        # Test Supabase connection
+        result = supabase.table("items").select("id").limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}

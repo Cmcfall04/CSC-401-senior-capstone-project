@@ -114,6 +114,7 @@ export async function getItems(options?: {
   sort_by?: "name" | "expiration_date" | "created_at" | "quantity" | "added_at";
   sort_order?: "asc" | "desc";
   expiring_soon?: boolean;
+  household_id?: string;
 }): Promise<PaginatedItemsResponse> {
   // Build query parameters
   const params = new URLSearchParams();
@@ -123,6 +124,7 @@ export async function getItems(options?: {
   if (options?.sort_by) params.append("sort_by", options.sort_by);
   if (options?.sort_order) params.append("sort_order", options.sort_order);
   if (options?.expiring_soon !== undefined) params.append("expiring_soon", options.expiring_soon.toString());
+  if (options?.household_id) params.append("household_id", options.household_id);
 
   const url = `${API_BASE_URL}/api/items${params.toString() ? `?${params.toString()}` : ""}`;
 
