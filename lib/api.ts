@@ -172,6 +172,47 @@ export async function getItems(options?: {
   return data;
 }
 
+// Recipe types (Spoonacular via backend proxy)
+export interface RecipeByIngredients {
+  id: number;
+  title: string;
+  image: string | null;
+  usedIngredientCount: number;
+  missedIngredientCount: number;
+  missedIngredients: Array<{ name: string; original?: string }>;
+  readyInMinutes?: number;
+  servings?: number;
+  sourceUrl?: string;
+  summary?: string;
+}
+
+export interface RecipesByIngredientsResponse {
+  recipes: RecipeByIngredients[];
+}
+
+export async function getRecipesByIngredients(options: {
+  ingredients: string;
+  number?: number;
+  ranking?: 1 | 2;
+  diet?: string | null;
+}): Promise<RecipesByIngredientsResponse> {
+  const params = new URLSearchParams();
+  params.set("ingredients", options.ingredients);
+  if (options.number != null) params.set("number", options.number.toString());
+  if (options.ranking != null) params.set("ranking", options.ranking.toString());
+  if (options.diet) params.set("diet", options.diet);
+
+  const url = `${API_BASE_URL}/api/recipes/by-ingredients?${params.toString()}`;
+  const response = await authenticatedFetch(url, { method: "GET" });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch recipes" }));
+    throw new Error(error.detail || "Failed to fetch recipes");
+  }
+
+  return response.json();
+}
+
 export async function getItem(itemId: string): Promise<BackendItem> {
   const response = await authenticatedFetch(`${API_BASE_URL}/api/items/${itemId}`, {
     method: "GET",

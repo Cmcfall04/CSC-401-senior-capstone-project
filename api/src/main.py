@@ -30,6 +30,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 USDA_API_KEY = os.getenv("USDA_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SPOONACULAR_API_KEY = os.getenv("SPOONACULAR_API_KEY")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL environment variable is required")
@@ -1100,6 +1101,89 @@ async def create_item_from_usda(
     except Exception as e:
         logger.error(f"Error creating item from USDA for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# Spoonacular recipe API (proxy to keep API key server-side)
+@app.get("/api/recipes/by-ingredients")
+async def get_recipes_by_ingredients(
+    user_id: Optional[str] = Depends(get_user_id),
+    ingredients: str = Query(..., description="Comma-separated list of ingredients"),
+    number: int = Query(12, ge=1, le=100, description="Number of recipes to return"),
+    ranking: int = Query(1, description="1=maximize used ingredients, 2=minimize missing"),
+    diet: Optional[str] = Query(None, description="Diet filter: vegetarian, vegan, gluten free"),
+):
+    """Get recipe suggestions from Spoonacular by pantry ingredients. Requires auth."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not SPOONACULAR_API_KEY:
+        raise HTTPException(status_code=500, detail="Recipe API not configured")
+    ingredients_clean = ",".join(s.strip() for s in ingredients.split(",") if s.strip())
+    if not ingredients_clean:
+        return {"recipes": []}
+    try:
+        if diet:
+            # complexSearch supports includeIngredients + diet
+            url = "https://api.spoonacular.com/recipes/complexSearch"
+            params = {
+                "apiKey": SPOONACULAR_API_KEY,
+                "includeIngredients": ingredients_clean,
+                "diet": diet,
+                "number": number,
+                "addRecipeInformation": "true",
+            }
+        else:
+            url = "https://api.spoonacular.com/recipes/findByIngredients"
+            params = {
+                "apiKey": SPOONACULAR_API_KEY,
+                "ingredients": ingredients_clean,
+                "number": number,
+                "ranking": ranking,
+                "ignorePantry": "true",
+            }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+        if diet:
+            results = data.get("results", [])
+        else:
+            results = data if isinstance(data, list) else []
+        if not results:
+            return {"recipes": []}
+        ids = [r["id"] for r in results]
+        # Get full recipe info (readyInMinutes, servings, sourceUrl, summary)
+        ids_param = ",".join(str(i) for i in ids[:25])
+        info_url = "https://api.spoonacular.com/recipes/informationBulk"
+        info_params = {"apiKey": SPOONACULAR_API_KEY, "ids": ids_param}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            info_resp = await client.get(info_url, params=info_params)
+            info_resp.raise_for_status()
+            info_list = info_resp.json()
+        info_by_id = {int(r["id"]): r for r in info_list}
+        recipes_out = []
+        for r in results:
+            rid = r["id"]
+            info = info_by_id.get(rid, {})
+            recipes_out.append({
+                "id": rid,
+                "title": r.get("title") or info.get("title", ""),
+                "image": r.get("image") or info.get("image"),
+                "usedIngredientCount": r.get("usedIngredientCount", 0),
+                "missedIngredientCount": r.get("missedIngredientCount", 0),
+                "missedIngredients": r.get("missedIngredients", []),
+                "readyInMinutes": info.get("readyInMinutes"),
+                "servings": info.get("servings"),
+                "sourceUrl": info.get("sourceUrl"),
+                "summary": info.get("summary"),
+            })
+        return {"recipes": recipes_out}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Spoonacular API error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=502, detail="Recipe service error")
+    except Exception as e:
+        logger.error(f"Error fetching recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching recipes: {str(e)}")
+
 
 @app.post("/api/receipt/scan")
 async def scan_receipt(
