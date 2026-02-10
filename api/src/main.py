@@ -1528,6 +1528,140 @@ def update_household(
         logger.error(f"Error updating household: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+# Admin endpoints for user management
+@app.delete("/api/admin/users/{user_email}")
+def delete_user_by_email(user_email: str):
+    """
+    Admin endpoint to delete a user by email.
+    Deletes user from Supabase Auth and all related data.
+    """
+    try:
+        # Find user by email using Supabase Auth admin API
+        # First, try to get user by email using REST API
+        import httpx
+        
+        admin_url = f"{SUPABASE_URL}/auth/v1/admin/users"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        user_id = None
+        
+        # Search for user by email
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                # Get all users (with pagination if needed)
+                response = client.get(admin_url, headers=headers, params={"per_page": 1000})
+                if response.status_code == 200:
+                    users_data = response.json()
+                    for user in users_data.get("users", []):
+                        if user.get("email") == user_email:
+                            user_id = user.get("id")
+                            break
+        except Exception as api_error:
+            logger.error(f"Error searching for user via REST API: {str(api_error)}")
+            raise HTTPException(status_code=500, detail=f"Could not search for user: {str(api_error)}")
+        
+        if not user_id:
+            raise HTTPException(status_code=404, detail=f"User with email {user_email} not found")
+        
+        user_id = str(user_id)
+        logger.info(f"Found user {user_email} with ID {user_id}, deleting...")
+        
+        # Delete user from Supabase Auth
+        try:
+            supabase.auth.admin.delete_user(user_id)
+            logger.info(f"Deleted user {user_id} from Supabase Auth")
+        except Exception as delete_error:
+            logger.error(f"Error deleting user from Auth: {str(delete_error)}")
+            raise HTTPException(status_code=500, detail=f"Could not delete user from Auth: {str(delete_error)}")
+        
+        # Clean up related data
+        try:
+            supabase.table("profiles").delete().eq("id", user_id).execute()
+            logger.info(f"Deleted profile for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete profile: {str(e)}")
+        
+        try:
+            supabase.table("relation_househould").delete().eq("user_id", user_id).execute()
+            logger.info(f"Deleted household relations for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete household relations: {str(e)}")
+        
+        try:
+            supabase.table("items").delete().eq("user_id", user_id).execute()
+            logger.info(f"Deleted items for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete items: {str(e)}")
+        
+        return {
+            "message": f"User {user_email} deleted successfully",
+            "user_id": user_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user {user_email}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting user: {str(e)}")
+
+@app.get("/api/admin/users")
+def list_all_users():
+    """
+    Admin endpoint to list all users.
+    Shows users from both Supabase Auth and profiles table.
+    """
+    try:
+        import httpx
+        
+        admin_url = f"{SUPABASE_URL}/auth/v1/admin/users"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        auth_users = []
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(admin_url, headers=headers, params={"per_page": 1000})
+                if response.status_code == 200:
+                    users_data = response.json()
+                    for user in users_data.get("users", []):
+                        auth_users.append({
+                            "id": user.get("id"),
+                            "email": user.get("email"),
+                            "created_at": user.get("created_at"),
+                            "email_confirmed": user.get("email_confirmed_at") is not None,
+                            "last_sign_in": user.get("last_sign_in_at")
+                        })
+        except Exception as api_error:
+            logger.warning(f"Could not fetch users from Auth API: {str(api_error)}")
+        
+        # Also get users from profiles table
+        try:
+            profiles = supabase.table("profiles").select("*").execute()
+            profile_users = [{"id": p["id"], "email": p["email"], "name": p["name"], "source": "profiles"} for p in profiles.data]
+        except Exception as e:
+            logger.warning(f"Could not fetch profiles: {str(e)}")
+            profile_users = []
+        
+        return {
+            "auth_users": {
+                "total": len(auth_users),
+                "users": auth_users
+            },
+            "profile_users": {
+                "total": len(profile_users),
+                "users": profile_users
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error listing users: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error listing users: {str(e)}")
+
 # Health check endpoint
 @app.get("/health")
 def health():
