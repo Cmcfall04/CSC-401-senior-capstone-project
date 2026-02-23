@@ -248,9 +248,18 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
 
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-4">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={handleClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Scan receipt"
+    >
+      <div
+        className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4 p-6 pb-0 flex-shrink-0">
           <h2 className="text-xl font-semibold">Scan Receipt</h2>
           <button
             onClick={handleClose}
@@ -260,7 +269,7 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
           </button>
         </div>
 
-        <div className="space-y-4">
+        <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-4">
           {/* Upload Section */}
           <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center">
             {preview ? (
@@ -357,23 +366,24 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-2 pt-2">
-            <button
-              onClick={handleClose}
-              className="flex-1 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
-              disabled={isScanning}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleScan}
-              disabled={!selectedFile || isScanning}
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isScanning ? "Scanning..." : "Scan Receipt"}
-            </button>
-          </div>
+        </div>
+
+        {/* Action Buttons - fixed at bottom */}
+        <div className="flex gap-2 p-6 pt-0 flex-shrink-0 border-t border-slate-100">
+          <button
+            onClick={handleClose}
+            className="flex-1 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+            disabled={isScanning}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleScan}
+            disabled={!selectedFile || isScanning}
+            className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isScanning ? "Scanning..." : "Scan Receipt"}
+          </button>
         </div>
       </div>
     </div>

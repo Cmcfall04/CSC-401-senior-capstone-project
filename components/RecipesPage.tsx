@@ -27,6 +27,7 @@ export default function RecipesPage() {
   const [ingredientsUsed, setIngredientsUsed] = useState<string>("");
   const [households, setHouseholds] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedHousehold, setSelectedHousehold] = useState<string | null>(null);
+  const [missingPopupRecipeId, setMissingPopupRecipeId] = useState<number | null>(null);
 
   const fetchHouseholds = async () => {
     try {
@@ -265,11 +266,22 @@ export default function RecipesPage() {
                       No image
                     </div>
                   )}
-                  {recipe.missedIngredientCount > 0 && (
-                    <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-800/80 text-white text-xs">
-                      +{recipe.missedIngredientCount} missing
-                    </span>
-                  )}
+                  {(() => {
+                    const missingCount =
+                      recipe.missedIngredients?.length ?? recipe.missedIngredientCount ?? 0;
+                    return missingCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setMissingPopupRecipeId((id) => (id === recipe.id ? null : recipe.id));
+                        }}
+                        className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-800/80 text-white text-xs hover:bg-slate-700 transition-colors cursor-pointer"
+                      >
+                        +{missingCount} missing
+                      </button>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="p-4 flex flex-col gap-2 flex-1">
                   <h3 className="font-semibold text-slate-800 line-clamp-2">
@@ -283,6 +295,26 @@ export default function RecipesPage() {
                       <span>{recipe.servings} servings</span>
                     )}
                   </div>
+                  {recipe.missedIngredients && recipe.missedIngredients.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setMissingPopupRecipeId((id) => (id === recipe.id ? null : recipe.id));
+                      }}
+                      className="text-xs text-slate-500 hover:text-green-600 hover:underline text-left"
+                    >
+                      Missing:{" "}
+                      {recipe.missedIngredients
+                        .slice(0, 3)
+                        .map((m) => m.name || m.original || "")
+                        .filter(Boolean)
+                        .join(", ")}
+                      {recipe.missedIngredients.length > 3 &&
+                        ` +${recipe.missedIngredients.length - 3} more`}{" "}
+                      (click to see all)
+                    </button>
+                  )}
                   {recipe.summary && (
                     <p
                       className="text-sm text-slate-600 line-clamp-2"
@@ -306,6 +338,45 @@ export default function RecipesPage() {
             ))}
           </div>
         )}
+
+        {/* Missing ingredients popup */}
+        {missingPopupRecipeId != null && (() => {
+          const recipe = filteredRecipes.find((r) => r.id === missingPopupRecipeId);
+          if (!recipe?.missedIngredients?.length) return null;
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+              onClick={() => setMissingPopupRecipeId(null)}
+              role="dialog"
+              aria-label="Missing ingredients"
+            >
+              <div
+                className="bg-white rounded-xl shadow-xl max-w-sm w-full p-4 max-h-[70vh] flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="font-semibold text-slate-800 mb-1 line-clamp-2">
+                  {recipe.title}
+                </h3>
+                <p className="text-sm text-slate-600 mb-3">Ingredients you don&apos;t have:</p>
+                <ul className="text-sm text-slate-700 space-y-1 overflow-y-auto flex-1">
+                  {recipe.missedIngredients.map((m, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="text-slate-400 mt-0.5">•</span>
+                      <span>{m.original ?? m.name ?? "—"}</span>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  onClick={() => setMissingPopupRecipeId(null)}
+                  className="mt-4 w-full py-2 rounded-lg bg-slate-200 text-slate-800 font-medium hover:bg-slate-300 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </section>
     </div>
   );

@@ -1122,7 +1122,7 @@ async def get_recipes_by_ingredients(
         return {"recipes": []}
     try:
         if diet:
-            # complexSearch supports includeIngredients + diet
+            # complexSearch supports includeIngredients + diet; fillIngredients gives used/missed per recipe
             url = "https://api.spoonacular.com/recipes/complexSearch"
             params = {
                 "apiKey": SPOONACULAR_API_KEY,
@@ -1130,6 +1130,7 @@ async def get_recipes_by_ingredients(
                 "diet": diet,
                 "number": number,
                 "addRecipeInformation": "true",
+                "fillIngredients": "true",
             }
         else:
             url = "https://api.spoonacular.com/recipes/findByIngredients"
@@ -1164,13 +1165,18 @@ async def get_recipes_by_ingredients(
         for r in results:
             rid = r["id"]
             info = info_by_id.get(rid, {})
+            missed_list = r.get("missedIngredients") if isinstance(r.get("missedIngredients"), list) else []
+            used_list = r.get("usedIngredients") if isinstance(r.get("usedIngredients"), list) else []
+            # Derive counts from actual arrays so displayed count always matches the list
+            missed_count = len(missed_list) if missed_list else r.get("missedIngredientCount", 0)
+            used_count = len(used_list) if used_list else r.get("usedIngredientCount", 0)
             recipes_out.append({
                 "id": rid,
                 "title": r.get("title") or info.get("title", ""),
                 "image": r.get("image") or info.get("image"),
-                "usedIngredientCount": r.get("usedIngredientCount", 0),
-                "missedIngredientCount": r.get("missedIngredientCount", 0),
-                "missedIngredients": r.get("missedIngredients", []),
+                "usedIngredientCount": used_count,
+                "missedIngredientCount": missed_count,
+                "missedIngredients": missed_list,
                 "readyInMinutes": info.get("readyInMinutes"),
                 "servings": info.get("servings"),
                 "sourceUrl": info.get("sourceUrl"),
