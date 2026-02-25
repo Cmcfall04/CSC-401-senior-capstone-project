@@ -10,6 +10,8 @@ export interface BackendItem {
   name: string;
   quantity: number;
   expiration_date: string | null;
+  storage_type?: string; // "pantry", "fridge", "freezer"
+  is_opened?: boolean;
   added_at: string;
   created_at: string;
   updated_at: string;
@@ -27,6 +29,8 @@ export interface UpdateItemRequest {
   name?: string;
   quantity?: number;
   expiration_date?: string | null;
+  storage_type?: string; // "pantry", "fridge", "freezer"
+  is_opened?: boolean;
 }
 
 // Helper to get user ID from session cookie

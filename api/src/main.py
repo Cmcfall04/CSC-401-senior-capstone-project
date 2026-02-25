@@ -119,6 +119,8 @@ class ItemResponse(BaseModel):
     name: str
     quantity: int
     expiration_date: Optional[str] = None
+    storage_type: Optional[str] = None  # "pantry", "fridge", "freezer"
+    is_opened: Optional[bool] = False  # Whether the item has been opened
     added_at: str
     created_at: str
     updated_at: str
@@ -794,8 +796,8 @@ EXPIRATION_RULES = {
             "lettuce", "spinach", "kale", "arugula", "chard", "collard greens", "mustard greens", "bok choy", "napa cabbage", "swiss chard", "watercress", "endive", "frisée", "radicchio", "mache", "lambs lettuce",
             # Vegetables
             "broccoli", "carrots", "celery", "bell pepper", "cucumber", "tomato", "mushrooms", "asparagus", "green beans", "zucchini", "squash", "eggplant", "cauliflower", "brussels sprouts", "cabbage", "radishes", "turnips", "beets", "corn on the cob",
-            # Peppers
-            "bell pepper", "red pepper", "green pepper", "yellow pepper", "orange pepper", "jalapeño", "jalapeno", "serrano", "habanero", "poblano", "anaheim", "banana pepper",
+            # Peppers (vegetables)
+            "bell pepper", "red pepper", "green pepper", "red bell pepper", "green bell pepper", "yellow pepper", "orange pepper", "yellow bell pepper", "orange bell pepper", "sweet pepper", "jalapeño", "jalapeno", "serrano", "habanero", "poblano", "anaheim", "banana pepper", "chili pepper", "chile pepper",
             # Berries and small fruits
             "berries", "grapes", "strawberries", "blueberries", "raspberries", "blackberries", "cherries", "cranberries", "gooseberries", "currants", "elderberries", "mulberries",
             # Other perishable produce
@@ -936,8 +938,8 @@ EXPIRATION_RULES = {
             "basil", "oregano", "thyme", "rosemary", "sage", "parsley", "cilantro", "dill", "mint", "chives", "tarragon", "marjoram", "chervil", "sumac",
             # Ground spices
             "paprika", "cumin", "coriander", "turmeric", "cinnamon", "nutmeg", "cloves", "allspice", "cardamom", "star anise", "bay leaves",
-            # Pepper varieties
-            "black pepper", "white pepper", "red pepper", "cayenne pepper", "cayenne", "crushed red pepper", "red pepper flakes", "pink peppercorns", "green peppercorns", "szechuan pepper", "sichuan pepper",
+            # Pepper varieties (spices)
+            "black pepper", "white pepper", "red pepper", "green pepper", "red pepper flakes", "red pepper powder", "green pepper flakes", "cayenne pepper", "cayenne", "crushed red pepper", "pink peppercorns", "green peppercorns", "szechuan pepper", "sichuan pepper", "ground pepper", "peppercorns",
             # Seeds
             "sesame seeds", "poppy seeds", "fennel seeds", "caraway seeds", "celery seeds", "mustard seeds", "cumin seeds", "coriander seeds", "anise seeds", "nigella seeds", "black seeds",
             # Indian spices
@@ -1089,6 +1091,27 @@ def get_recommended_storage_type(category: Optional[str]) -> Optional[str]:
     
     return None  # Unknown category
 
+def get_storage_safety_level(storage_type: str) -> int:
+    """
+    Get safety level of storage type (higher = safer for food preservation).
+    Returns: 3 (freezer), 2 (fridge), 1 (pantry)
+    """
+    safety_levels = {
+        "freezer": 3,  # Safest - preserves food longest
+        "fridge": 2,    # Medium - standard refrigeration
+        "pantry": 1     # Least safe - room temperature
+    }
+    return safety_levels.get(storage_type, 1)
+
+def is_less_safe_storage(chosen: str, recommended: str) -> bool:
+    """
+    Check if chosen storage is less safe than recommended.
+    Returns True if chosen storage has lower safety level than recommended.
+    """
+    chosen_level = get_storage_safety_level(chosen)
+    recommended_level = get_storage_safety_level(recommended)
+    return chosen_level < recommended_level
+
 def suggest_expiration_date(
     item_name: str, 
     storage_type: str = "pantry", 
@@ -1117,6 +1140,18 @@ def suggest_expiration_date(
     cleaned_name = re.sub(r'\b(organic|fresh|frozen|dried|raw|cooked|whole|low fat|fat free|reduced fat|light|lite)\b', '', item_name_lower)
     cleaned_name = re.sub(r'\s+', ' ', cleaned_name).strip()
     
+    # Context clues to differentiate pepper (vegetable) vs pepper (spice)
+    spice_context_words = ["flakes", "powder", "ground", "spice", "seasoning", "peppercorn", "cayenne", "crushed"]
+    vegetable_context_words = ["bell", "fresh", "sweet", "chili pepper", "chile pepper", "jalapeño", "jalapeno", "serrano", "habanero", "poblano"]
+    
+    def is_likely_spice(name: str) -> bool:
+        """Check if 'pepper' likely refers to spice based on context."""
+        return any(word in name for word in spice_context_words)
+    
+    def is_likely_vegetable(name: str) -> bool:
+        """Check if 'pepper' likely refers to vegetable based on context."""
+        return any(word in name for word in vegetable_context_words)
+    
     matched_category = None
     matched_days = None
     match_type = None  # "exact", "partial", "usda"
@@ -1129,22 +1164,17 @@ def suggest_expiration_date(
             usda_categories = rules.get("usda_categories", [])
             for usda_cat in usda_categories:
                 if usda_cat.lower() in usda_category_lower or usda_category_lower in usda_cat.lower():
-                    # Get days based on storage type
+                    # Always record category/type on a USDA hit
+                    matched_category = category
+                    match_type = "usda"
+                    # Get days based on storage type (may be None if storage doesn't apply)
                     if storage_type == "freezer" and rules.get("freezer") is not None:
                         matched_days = rules["freezer"]
-                        matched_category = category
-                        match_type = "usda"
-                        break
                     elif storage_type == "fridge" and rules.get("fridge") is not None:
                         matched_days = rules["fridge"]
-                        matched_category = category
-                        match_type = "usda"
-                        break
                     elif storage_type == "pantry" and rules.get("pantry") is not None:
                         matched_days = rules["pantry"]
-                        matched_category = category
-                        match_type = "usda"
-                        break
+                    break
             if match_type == "usda":
                 break
     
@@ -1168,29 +1198,42 @@ def suggest_expiration_date(
                 else:
                     continue
                 
+                # Context-aware scoring for ambiguous "red pepper" / "green pepper"
+                if keyword_lower in ["red pepper", "green pepper"]:
+                    # Boost score if context matches the category
+                    if category == "spices" and is_likely_spice(item_name_lower):
+                        score += 5  # Boost spice match
+                    elif category == "produce_perishable" and is_likely_vegetable(item_name_lower):
+                        score += 5  # Boost vegetable match
+                    # Penalize mismatches
+                    elif category == "spices" and is_likely_vegetable(item_name_lower):
+                        score -= 3  # Penalize spice match when it's clearly a vegetable
+                    elif category == "produce_perishable" and is_likely_spice(item_name_lower):
+                        score -= 3  # Penalize vegetable match when it's clearly a spice
+                
                 # Only use this match if it's better than previous
                 if score > best_match_score:
                     best_match_score = score
                     match_type = match_type_candidate
+                    matched_category = category  # Always record category on keyword match
                     
-                    # Get days based on storage type
+                    # Get days based on storage type (may be None if storage doesn't apply)
                     if storage_type == "freezer" and rules.get("freezer") is not None:
                         matched_days = rules["freezer"]
-                        matched_category = category
                     elif storage_type == "fridge" and rules.get("fridge") is not None:
                         matched_days = rules["fridge"]
-                        matched_category = category
                     elif storage_type == "pantry" and rules.get("pantry") is not None:
                         matched_days = rules["pantry"]
-                        matched_category = category
+                    else:
+                        matched_days = None
                     
                     # For exact matches, we can break early
                     if match_type == "exact" and matched_days is not None:
                         break
         
-        # If we found a match, check if we should continue for better matches
+        # If we found any match (even without days), re-check for more specific categories
         # (e.g., "ground beef" should match "meat_ground" not just "meat")
-        if matched_days is not None:
+        if matched_category is not None:
             # Re-check for more specific categories (they come later in dict, so check again)
             for category, rules in EXPIRATION_RULES.items():
                 # Skip if this is the category we already matched
@@ -1202,28 +1245,54 @@ def suggest_expiration_date(
                     pattern = r'\b' + re.escape(keyword_lower) + r'\b'
                     
                     if re.search(pattern, item_name_lower) or re.search(pattern, cleaned_name):
-                        # More specific match found
+                        # More specific match found — always update category
+                        matched_category = category
+                        match_type = "exact"
                         if storage_type == "freezer" and rules.get("freezer") is not None:
                             matched_days = rules["freezer"]
-                            matched_category = category
-                            match_type = "exact"
-                            break
                         elif storage_type == "fridge" and rules.get("fridge") is not None:
                             matched_days = rules["fridge"]
-                            matched_category = category
-                            match_type = "exact"
-                            break
                         elif storage_type == "pantry" and rules.get("pantry") is not None:
                             matched_days = rules["pantry"]
-                            matched_category = category
-                            match_type = "exact"
-                            break
+                        else:
+                            matched_days = None
+                        break
                 if match_type == "exact" and matched_category != category:
                     break
     
+    # If a category was matched but the current storage type has no shelf-life data,
+    # we need to handle two cases:
+    # 1. Auto-fill: Use recommended storage's days (for initial suggestion)
+    # 2. User explicitly chose wrong storage: Use very short expiration (food safety)
+    # 
+    # We only penalize when the user chooses a LESS safe storage than recommended.
+    # If they choose a MORE safe storage (e.g., freezer when fridge is recommended),
+    # we use the more safe storage's shelf-life data (which is already set above).
+    wrong_storage = False
+    if matched_category is not None and matched_days is None:
+        rec_storage = get_recommended_storage_type(matched_category)
+        
+        # Only penalize if chosen storage is LESS safe than recommended
+        # (e.g., pantry when fridge is recommended = unsafe)
+        # (e.g., freezer when fridge is recommended = safe, use freezer days)
+        if rec_storage and rec_storage != storage_type:
+            if is_less_safe_storage(storage_type, rec_storage):
+                # Highly perishable categories in less safe storage = 1 day (food safety)
+                highly_perishable = ["meat", "meat_ground", "seafood", "seafood_shellfish", "dairy", "dairy_soft", "eggs"]
+                if matched_category in highly_perishable:
+                    matched_days = 1  # Very short expiration for safety
+                    wrong_storage = True
+        # For other cases (or non-perishable in wrong storage), use recommended storage's days (for auto-fill)
+        if matched_days is None and rec_storage:
+            rec_days = EXPIRATION_RULES.get(matched_category, {}).get(rec_storage)
+            if rec_days is not None:
+                matched_days = rec_days
+
     # Determine confidence level
     if matched_days is not None:
-        if match_type == "usda" or match_type == "exact":
+        if wrong_storage:
+            confidence = "low"  # Wrong storage = low confidence for food safety
+        elif match_type == "usda" or match_type == "exact":
             confidence = "high"
         elif match_type == "partial":
             confidence = "medium"

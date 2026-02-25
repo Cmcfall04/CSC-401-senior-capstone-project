@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS items (
     name TEXT NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     expiration_date DATE,
+    storage_type TEXT DEFAULT 'pantry' CHECK (storage_type IN ('pantry', 'fridge', 'freezer')),
+    is_opened BOOLEAN DEFAULT FALSE,
     added_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS items (
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_items_user_id ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_items_expiration_date ON items(expiration_date);
+CREATE INDEX IF NOT EXISTS idx_items_storage_type ON items(storage_type);
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -112,6 +115,28 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+**Note:** If you already have an existing database without the `storage_type` and `is_opened` columns, run this migration in the SQL Editor:
+
+```sql
+-- Migration: Add storage_type and is_opened columns to items table
+ALTER TABLE items 
+ADD COLUMN IF NOT EXISTS storage_type TEXT DEFAULT 'pantry' CHECK (storage_type IN ('pantry', 'fridge', 'freezer'));
+
+ALTER TABLE items 
+ADD COLUMN IF NOT EXISTS is_opened BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_items_storage_type ON items(storage_type);
+
+-- Update existing rows to have default values
+UPDATE items 
+SET storage_type = 'pantry' 
+WHERE storage_type IS NULL;
+
+UPDATE items 
+SET is_opened = FALSE 
+WHERE is_opened IS NULL;
 ```
 
 ### Step 2: Create Environment Files
