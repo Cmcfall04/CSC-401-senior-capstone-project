@@ -200,6 +200,23 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
 The API will be available at http://localhost:8000
 
+#### Optional: Apify (grocery price compare)
+
+To enable the `/api/price-compare` endpoint (Instacart prices via Apify), add to `api/.env`:
+
+```bash
+# Apify (optional – do not commit your token)
+APIFY_TOKEN=your-apify-api-token
+# Optional: APIFY_ACTOR_ID (default: consummate_mandala/instacart-product-scraper)
+# USAGE_CUTOFF_USD=4.50
+# APIFY_TIMEOUT_SECONDS=120
+# APIFY_MAX_RESULTS=10
+# APIFY_CACHE_TTL_HOURS=6
+# APIFY_USE_RESIDENTIAL_PROXY=true   # often improves results when Instacart blocks; uses more usage
+```
+
+Usage is guarded: the app stops calling Apify when monthly usage exceeds `USAGE_CUTOFF_USD` or remaining credits are low. Results are cached by (query, zip) to reduce usage. Set `APIFY_USE_RESIDENTIAL_PROXY=true` if you often get "no results" (can help with blocks). Verify with: `python scripts/verify_apify.py` (from project root).
+
 ### Step 3: Frontend Setup
 
 1. In a new terminal, navigate to the project root:

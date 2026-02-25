@@ -28,6 +28,7 @@ export default function RecipesPage() {
   const [households, setHouseholds] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedHousehold, setSelectedHousehold] = useState<string | null>(null);
   const [missingPopupRecipeId, setMissingPopupRecipeId] = useState<number | null>(null);
+  const [prioritizeExpiring, setPrioritizeExpiring] = useState(false);
 
   const fetchHouseholds = async () => {
     try {
@@ -51,7 +52,7 @@ export default function RecipesPage() {
     }
   };
 
-  const fetchRecipes = async (ingredients: string, diet: string) => {
+  const fetchRecipes = async (ingredients: string, diet: string, prioritize: boolean) => {
     if (!ingredients.trim()) {
       setRecipes([]);
       setLoading(false);
@@ -65,6 +66,8 @@ export default function RecipesPage() {
         number: DEFAULT_RECIPE_NUMBER,
         ranking: 1,
         diet: diet || undefined,
+        prioritizeExpiring: prioritize,
+        householdId: selectedHousehold || undefined,
       });
       setRecipes(response.recipes || []);
       setIngredientsUsed(ingredients);
@@ -94,7 +97,7 @@ export default function RecipesPage() {
           .filter(Boolean);
         const unique = Array.from(new Set(names)).slice(0, MAX_INGREDIENTS);
         const ingredients = unique.join(",");
-        await fetchRecipes(ingredients, selectedDiet);
+        await fetchRecipes(ingredients, selectedDiet, prioritizeExpiring);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load pantry");
@@ -111,8 +114,8 @@ export default function RecipesPage() {
 
   useEffect(() => {
     if (!ingredientsUsed && !loading) return;
-    if (ingredientsUsed) fetchRecipes(ingredientsUsed, selectedDiet);
-  }, [selectedDiet]);
+    if (ingredientsUsed) fetchRecipes(ingredientsUsed, selectedDiet, prioritizeExpiring);
+  }, [selectedDiet, prioritizeExpiring]);
 
   const filteredRecipes = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -162,6 +165,18 @@ export default function RecipesPage() {
 
       <section className="card p-4 sm:p-6">
         <div className="flex flex-col gap-4">
+          <label className="flex items-center gap-2 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={prioritizeExpiring}
+              onChange={(e) => setPrioritizeExpiring(e.target.checked)}
+              disabled={loading}
+              className="rounded border-slate-300 text-green-600 focus:ring-green-500"
+            />
+            <span className="text-sm font-medium text-slate-700 group-hover:text-slate-900">
+              Prioritize recipes that use soon-to-expire items
+            </span>
+          </label>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <input
               type="search"

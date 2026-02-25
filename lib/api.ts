@@ -195,12 +195,16 @@ export async function getRecipesByIngredients(options: {
   number?: number;
   ranking?: 1 | 2;
   diet?: string | null;
+  prioritizeExpiring?: boolean;
+  householdId?: string | null;
 }): Promise<RecipesByIngredientsResponse> {
   const params = new URLSearchParams();
   params.set("ingredients", options.ingredients);
   if (options.number != null) params.set("number", options.number.toString());
   if (options.ranking != null) params.set("ranking", options.ranking.toString());
   if (options.diet) params.set("diet", options.diet);
+  if (options.prioritizeExpiring) params.set("prioritize_expiring", "true");
+  if (options.householdId) params.set("household_id", options.householdId);
 
   const url = `${API_BASE_URL}/api/recipes/by-ingredients?${params.toString()}`;
   const response = await authenticatedFetch(url, { method: "GET" });

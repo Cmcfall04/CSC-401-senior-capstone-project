@@ -1055,6 +1055,89 @@ async def search_food(query: str):
         logger.error(f"Error searching USDA API: {str(e)}")
         raise HTTPException(status_code=500, detail=f"USDA API error: {str(e)}")
 
+
+# -----------------------------------------------------------------------------
+# Price compare (Apify Instacart scraper – hybrid grocery price source)
+# -----------------------------------------------------------------------------
+@app.get("/api/price-compare")
+def price_compare(
+    query: str = Query(..., description="Item/search term"),
+    zip: str = Query(..., description="ZIP code for store area"),
+):
+    """
+    Compare grocery prices via Apify Instacart scraper.
+    Returns normalized results and cheapest item; uses usage guard and cache.
+    When Apify is disabled (usage limit), returns empty results with reason.
+    """
+    from .services.apify_client import can_use_apify, cached_search
+
+    query = (query or "").strip()
+    zip_code = (zip or "").strip()
+    if not query or not zip_code:
+        raise HTTPException(status_code=400, detail="query and zip are required")
+
+    apify_enabled, reason = can_use_apify()
+    if not apify_enabled:
+        logger.info("Price compare: Apify disabled - %s", reason)
+        return {
+            "query": query,
+            "zip": zip_code,
+            "cheapest": None,
+            "results": [],
+            "source_status": {
+                "apify_enabled": False,
+                "reason": reason,
+                "used_cache": False,
+            },
+        }
+
+    try:
+        results, used_cache, err = cached_search(query, zip_code)
+    except Exception as e:
+        logger.error("Price compare error: %s", type(e).__name__)
+        return {
+            "query": query,
+            "zip": zip_code,
+            "cheapest": None,
+            "results": [],
+            "source_status": {
+                "apify_enabled": True,
+                "reason": "Search failed",
+                "used_cache": False,
+            },
+        }
+
+    if err:
+        return {
+            "query": query,
+            "zip": zip_code,
+            "cheapest": None,
+            "results": [],
+            "source_status": {
+                "apify_enabled": True,
+                "reason": err,
+                "used_cache": False,
+            },
+        }
+
+    cheapest = None
+    if results:
+        by_price = sorted(results, key=lambda x: (x.get("price") or 0))
+        cheapest = by_price[0]
+
+    return {
+        "query": query,
+        "zip": zip_code,
+        "cheapest": cheapest,
+        "results": results,
+        "source_status": {
+            "apify_enabled": True,
+            "reason": "OK",
+            "used_cache": used_cache,
+        },
+    }
+
+
 @app.post("/api/items/from-usda")
 async def create_item_from_usda(
     usda_fdc_id: int,
@@ -1111,6 +1194,8 @@ async def get_recipes_by_ingredients(
     number: int = Query(12, ge=1, le=100, description="Number of recipes to return"),
     ranking: int = Query(1, description="1=maximize used ingredients, 2=minimize missing"),
     diet: Optional[str] = Query(None, description="Diet filter: vegetarian, vegan, gluten free"),
+    prioritize_expiring: bool = Query(False, description="Sort recipes to prioritize soon-to-expire pantry items"),
+    household_id: Optional[str] = Query(None, description="Household ID for expiring-soon lookup when prioritize_expiring is true"),
 ):
     """Get recipe suggestions from Spoonacular by pantry ingredients. Requires auth."""
     if not user_id:
@@ -1177,11 +1262,37 @@ async def get_recipes_by_ingredients(
                 "usedIngredientCount": used_count,
                 "missedIngredientCount": missed_count,
                 "missedIngredients": missed_list,
+                "usedIngredients": used_list,
                 "readyInMinutes": info.get("readyInMinutes"),
                 "servings": info.get("servings"),
                 "sourceUrl": info.get("sourceUrl"),
                 "summary": info.get("summary"),
             })
+        # Optionally prioritize recipes that use soon-to-expire pantry items
+        if prioritize_expiring and recipes_out:
+            try:
+                if household_id:
+                    member_check = supabase.table("relation_househould").select("*").eq("user_id", user_id).eq("household_id", household_id).execute()
+                    if not member_check.data:
+                        household_id = None
+                if not household_id:
+                    hh = supabase.table("relation_househould").select("household_id").eq("user_id", user_id).limit(1).execute()
+                    household_id = hh.data[0]["household_id"] if hh.data else None
+                if household_id:
+                    members = supabase.table("relation_househould").select("user_id").eq("household_id", household_id).execute()
+                    user_ids = [m["user_id"] for m in members.data]
+                    today = date.today()
+                    from datetime import timedelta
+                    soon = today + timedelta(days=7)
+                    expiring = supabase.table("items").select("name").in_("user_id", user_ids).not_.is_("expiration_date", "null").gte("expiration_date", today.isoformat()).lte("expiration_date", soon.isoformat()).execute()
+                    expiring_names = { (i.get("name") or "").strip().lower() for i in (expiring.data or []) if (i.get("name") or "").strip() }
+                    def score_recipe(rec):
+                        used = rec.get("usedIngredients") or []
+                        names = [ (u.get("name") or "").strip().lower() for u in used if (u.get("name") or "").strip() ]
+                        return sum(1 for n in names if n in expiring_names)
+                    recipes_out.sort(key=score_recipe, reverse=True)
+            except Exception as e:
+                logger.warning(f"Could not prioritize by expiring items: {e}")
         return {"recipes": recipes_out}
     except httpx.HTTPStatusError as e:
         logger.error(f"Spoonacular API error: {e.response.status_code} - {e.response.text}")
