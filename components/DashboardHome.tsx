@@ -129,7 +129,13 @@ export default function DashboardHome() {
   };
 
   // Handle update item
-  const handleUpdateItem = async (itemId: string, itemData: { name?: string; quantity?: number; expiration_date?: string | null }) => {
+  const handleUpdateItem = async (itemId: string, itemData: { 
+    name?: string; 
+    quantity?: number; 
+    expiration_date?: string | null;
+    storage_type?: string;
+    is_opened?: boolean;
+  }) => {
     try {
       await optimisticUpdate(itemId, itemData);
       setShowEditModal(false);
@@ -397,6 +403,8 @@ export default function DashboardHome() {
                   name: itemData.name,
                   quantity: itemData.quantity,
                   expiration_date: itemData.expiration_date,
+                  storage_type: itemData.storage_type,
+                  is_opened: itemData.is_opened,
                 });
                 // Modal will close on success (handled in AddItemModal)
               } catch (err) {
