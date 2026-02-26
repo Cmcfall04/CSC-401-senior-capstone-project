@@ -391,8 +391,7 @@ export default function ShoppingPageContent() {
       <section className="mb-6 bg-white rounded-2xl shadow-lg p-6">
         <h2 className="text-xl font-semibold text-slate-800 mb-1">Compare prices</h2>
         <p className="text-sm text-slate-600 mb-4">
-          Search for an item and your ZIP code to see prices from Instacart (via Apify). Results are cached to save usage.
-          The backend API must be running (e.g. <code className="text-xs bg-slate-100 px-1 rounded">uvicorn src.main:app --port 8000</code> in the <code className="text-xs bg-slate-100 px-1 rounded">api</code> folder).
+          Search for an item and your ZIP code.
         </p>
         <div className="flex flex-wrap gap-2 items-end mb-4">
           <div className="flex-1 min-w-[120px]">
