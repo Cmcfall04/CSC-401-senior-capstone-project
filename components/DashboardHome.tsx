@@ -419,6 +419,10 @@ export default function DashboardHome() {
           <ReceiptScannerModal
             isOpen={showScanModal}
             onClose={() => setShowScanModal(false)}
+            onItemsAdded={() => {
+              // Refresh items list after scanning
+              fetchItems();
+            }}
           />
 
           {/* Edit Item Modal */}

@@ -9,9 +9,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8
 interface ReceiptScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onItemsAdded?: (items: any[]) => void;
 }
 
-export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerModalProps) {
+export default function ReceiptScannerModal({ isOpen, onClose, onItemsAdded }: ReceiptScannerModalProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -112,6 +113,12 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
             setIsPolling(false);
             
             const items = data.result.items || [];
+            
+            // Call callback to refresh items list
+            if (onItemsAdded && items.length > 0) {
+              onItemsAdded(items);
+            }
+            
             alert(`Found ${items.length} items:\n${items.map((item: any) => `- ${item.name} (${item.quantity})`).join('\n')}`);
             
             onClose();
@@ -220,18 +227,33 @@ export default function ReceiptScannerModal({ isOpen, onClose }: ReceiptScannerM
       });
 
       if (!response.ok) {
-        throw new Error('Failed to scan receipt');
+        // Try to get error message from response
+        let errorMessage = 'Failed to scan receipt';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch {
+          // If response isn't JSON, use status text
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json()
       console.log('Scanned items:', data.items);
+
+      // Call callback to refresh items list
+      if (onItemsAdded && data.items) {
+        onItemsAdded(data.items);
+      }
 
       alert(`Found ${data.items.length} items:\n${data.items.map((item: any) => `- ${item.name} (${item.quantity})`).join('\n')}`);
 
       onClose();
     } catch (error) {
       console.error('Error scanning receipt:', error);
-      alert('Failed to scan receipt. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to scan receipt. Please try again.';
+      alert(errorMessage);
     } finally {
       setIsScanning(false);
     }

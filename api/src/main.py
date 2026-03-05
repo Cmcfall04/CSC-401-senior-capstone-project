@@ -1935,15 +1935,26 @@ Return ONLY JSON array:
         content = response.choices[0].message.content
         logger.info(f"GPT-4 raw response: {content}")
 
+
         # Extract JSON from response (GPT sometimes adds extra text)
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
             content = json_match.group(0)
         else:
             logger.error(f"No JSON array found in response: {content}")
-            raise ValueError("Could not find JSON array in response")
+            raise HTTPException(
+                status_code=422,
+                detail="Could not parse receipt data. The image may be unclear or not contain a valid receipt. Please try with a clearer image."
+            )
 
-        items = json.loads(content)
+        try:
+            items = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in response: {content}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid response format from receipt scanner. Please try again with a clearer image."
+            )
 
         # Insert items into database
         added_items = []
@@ -1953,6 +1964,9 @@ Return ONLY JSON array:
                 "name": item.get("name", ""),
                 "quantity": item.get("quantity", 1)
             }
+
+            usda_fdc_id = None
+            usda_category = None
 
             # Try to get USDA data with cleaned search term
             if USDA_API_KEY:
@@ -1975,11 +1989,66 @@ Return ONLY JSON array:
                             usda_name = food.get("description", item.get('name', ''))
                             new_item["usda_fdc_id"] = fdc_id
                             new_item["name"] = usda_name
+                            usda_fdc_id = fdc_id
                             logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                            
+                            # Fetch full food details to get category
+                            try:
+                                food_detail_url = f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}?api_key={USDA_API_KEY}"
+                                food_detail_response = await client.get(food_detail_url)
+                                food_detail_data = food_detail_response.json()
+                                food_category = food_detail_data.get("foodCategory", {})
+                                if food_category:
+                                    usda_category = food_category.get("description", "")
+                                    logger.info(f"Found USDA category for '{usda_name}': {usda_category}")
+                            except Exception as e:
+                                logger.debug(f"Could not fetch USDA category for fdcId {fdc_id}: {str(e)}")
                         else:
                             logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
                 except Exception as e:
                     logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            # Suggest expiration date and storage type
+            try:
+                # First call: Get recommended storage type (using pantry as initial guess)
+                _, _, category, recommended_storage = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type="pantry",  # Initial guess, will get recommendation
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Determine storage type to use for expiration calculation
+                storage_for_calculation = recommended_storage if recommended_storage else "pantry"
+                
+                # Second call: Get expiration date using the recommended storage type
+                suggested_date, confidence, _, _ = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type=storage_for_calculation,  # Use recommended storage for accurate expiration
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Add expiration date if suggested
+                if suggested_date:
+                    new_item["expiration_date"] = suggested_date.isoformat()
+                    logger.info(f"Suggested expiration for '{new_item['name']}': {suggested_date} (confidence: {confidence}, storage: {storage_for_calculation})")
+                else:
+                    logger.info(f"No expiration suggestion for '{new_item['name']}'")
+                
+                # Use recommended storage type if available, otherwise default to pantry
+                if recommended_storage:
+                    new_item["storage_type"] = recommended_storage
+                    logger.info(f"Using recommended storage for '{new_item['name']}': {recommended_storage}")
+                else:
+                    new_item["storage_type"] = "pantry"
+                    
+            except Exception as e:
+                logger.warning(f"Expiration suggestion failed for '{new_item['name']}': {str(e)}")
+                # Default to pantry if suggestion fails
+                new_item["storage_type"] = "pantry"
 
             result = supabase.table("items").insert(new_item).execute()
             added_items.append(result.data[0])
@@ -1992,8 +2061,27 @@ Return ONLY JSON array:
         logger.error(f"Failed to parse OpenAI response: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")
     except Exception as e:
-        logger.error(f"Error scanning receipt: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error scanning receipt: {error_msg}")
+        
+        # Check for OpenAI API specific errors
+        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=429, 
+                detail="OpenAI API rate limit exceeded. Please try again later or check your API quota."
+            )
+        elif "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            raise HTTPException(
+                status_code=402,
+                detail="OpenAI API quota exhausted. Please check your API billing and usage limits."
+            )
+        elif "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="OpenAI API authentication failed. Please check your API key configuration."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Error scanning receipt: {error_msg}")
 
 @app.post("/api/receipt/create-session")
 async def create_scan_session(
@@ -2059,7 +2147,8 @@ async def scan_receipt_mobile(
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
+                                "url": f"data:image/jpeg;base64,{base64_image}",
+                                "detail": "high"
                             }
                         }
                     ]
@@ -2078,9 +2167,23 @@ async def scan_receipt_mobile(
             content = json_match.group(0)
         else:
             logger.error(f"No JSON array found in response: {content}")
-            raise ValueError("Could not find JSON array in response")
+            scan_sessions[token]["status"] = "error"
+            scan_sessions[token]["result"] = {"error": "Could not parse receipt data. The image may be unclear or not contain a valid receipt."}
+            raise HTTPException(
+                status_code=422,
+                detail="Could not parse receipt data. The image may be unclear or not contain a valid receipt. Please try with a clearer image."
+            )
         
-        items = json.loads(content)
+        try:
+            items = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in response: {content}")
+            scan_sessions[token]["status"] = "error"
+            scan_sessions[token]["result"] = {"error": "Invalid response format from receipt scanner."}
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid response format from receipt scanner. Please try again with a clearer image."
+            )
 
         # Insert items into database
         added_items = []
@@ -2090,6 +2193,9 @@ async def scan_receipt_mobile(
                 "name": item.get("name", ""),
                 "quantity": item.get("quantity", 1)
             }
+
+            usda_fdc_id = None
+            usda_category = None
 
             # Try to get USDA data with cleaned search term
             if USDA_API_KEY:
@@ -2112,11 +2218,66 @@ async def scan_receipt_mobile(
                             usda_name = food.get("description", item.get('name', ''))
                             new_item["usda_fdc_id"] = fdc_id
                             new_item["name"] = usda_name
+                            usda_fdc_id = fdc_id
                             logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                            
+                            # Fetch full food details to get category
+                            try:
+                                food_detail_url = f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}?api_key={USDA_API_KEY}"
+                                food_detail_response = await client.get(food_detail_url)
+                                food_detail_data = food_detail_response.json()
+                                food_category = food_detail_data.get("foodCategory", {})
+                                if food_category:
+                                    usda_category = food_category.get("description", "")
+                                    logger.info(f"Found USDA category for '{usda_name}': {usda_category}")
+                            except Exception as e:
+                                logger.debug(f"Could not fetch USDA category for fdcId {fdc_id}: {str(e)}")
                         else:
                             logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
                 except Exception as e:
                     logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            # Suggest expiration date and storage type
+            try:
+                # First call: Get recommended storage type (using pantry as initial guess)
+                _, _, category, recommended_storage = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type="pantry",  # Initial guess, will get recommendation
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Determine storage type to use for expiration calculation
+                storage_for_calculation = recommended_storage if recommended_storage else "pantry"
+                
+                # Second call: Get expiration date using the recommended storage type
+                suggested_date, confidence, _, _ = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type=storage_for_calculation,  # Use recommended storage for accurate expiration
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Add expiration date if suggested
+                if suggested_date:
+                    new_item["expiration_date"] = suggested_date.isoformat()
+                    logger.info(f"Suggested expiration for '{new_item['name']}': {suggested_date} (confidence: {confidence}, storage: {storage_for_calculation})")
+                else:
+                    logger.info(f"No expiration suggestion for '{new_item['name']}'")
+                
+                # Use recommended storage type if available, otherwise default to pantry
+                if recommended_storage:
+                    new_item["storage_type"] = recommended_storage
+                    logger.info(f"Using recommended storage for '{new_item['name']}': {recommended_storage}")
+                else:
+                    new_item["storage_type"] = "pantry"
+                    
+            except Exception as e:
+                logger.warning(f"Expiration suggestion failed for '{new_item['name']}': {str(e)}")
+                # Default to pantry if suggestion fails
+                new_item["storage_type"] = "pantry"
 
             result = supabase.table("items").insert(new_item).execute()
             added_items.append(result.data[0])
@@ -2139,10 +2300,29 @@ async def scan_receipt_mobile(
         scan_sessions[token]["result"] = {"error": "Failed to parse receipt data"}
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")
     except Exception as e:
-        logger.error(f"Error scanning receipt: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error scanning receipt: {error_msg}")
         scan_sessions[token]["status"] = "error"
-        scan_sessions[token]["result"] = {"error": str(e)}
-        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+        scan_sessions[token]["result"] = {"error": error_msg}
+        
+        # Check for OpenAI API specific errors
+        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=429, 
+                detail="OpenAI API rate limit exceeded. Please try again later or check your API quota."
+            )
+        elif "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            raise HTTPException(
+                status_code=402,
+                detail="OpenAI API quota exhausted. Please check your API billing and usage limits."
+            )
+        elif "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="OpenAI API authentication failed. Please check your API key configuration."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Error scanning receipt: {error_msg}")
 
 
 @app.get("/api/receipt/scan-result/{token}")
