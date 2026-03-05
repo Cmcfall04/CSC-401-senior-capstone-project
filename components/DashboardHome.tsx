@@ -6,7 +6,7 @@ import Image from "next/image";
 import type { Route } from "next";
 import { useMemo, useState, useEffect } from "react";
 import { type PantryItem } from "@/data/pantry-items";
-import { getItems, getItem, backendItemToFrontend, updateItem, deleteItem, type BackendItem } from "@/lib/api";
+import { getItems, getItem, backendItemToFrontend, updateItem, deleteItem, getWasteSaved, type BackendItem } from "@/lib/api";
 import { useOptimisticItems } from "@/lib/hooks/useOptimisticItems";
 import AddItemModal from "./AddItemModal";
 import EditItemModal from "./EditItemModal";
@@ -37,6 +37,7 @@ export default function DashboardHome() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [households, setHouseholds] = useState<Array<{id: string, name: string}>>([]);
   const [selectedHousehold, setSelectedHousehold] = useState<string | null>(null);
+  const [wasteSaved, setWasteSaved] = useState<{items_saved: number; this_month: number; all_time: number} | null>(null);
 
   // Fetch households
   const fetchHouseholds = async () => {
@@ -96,6 +97,25 @@ export default function DashboardHome() {
       fetchItems();
     }
   }, [sort, selectedHousehold]);
+
+  // Fetch waste saved statistics
+  const fetchWasteSaved = async () => {
+    try {
+      const stats = await getWasteSaved();
+      setWasteSaved({
+        items_saved: stats.items_saved,
+        this_month: stats.this_month,
+        all_time: stats.all_time
+      });
+    } catch (err) {
+      console.error("Error fetching waste saved:", err);
+      // Don't show error to user, just log it
+    }
+  };
+
+  useEffect(() => {
+    fetchWasteSaved();
+  }, []);
 
   // Listen for refresh events (from optimistic updates)
   useEffect(() => {
@@ -158,6 +178,8 @@ export default function DashboardHome() {
       await optimisticDelete(deletingItemId);
       setShowDeleteConfirm(false);
       setDeletingItemId(null);
+      // Refresh waste saved stats after deletion
+      fetchWasteSaved();
     } catch (err) {
       console.error("Error deleting item:", err);
       alert(err instanceof Error ? err.message : "Failed to delete item");
@@ -258,7 +280,15 @@ export default function DashboardHome() {
 
         <div className="card p-4 sm:p-6">
           <h3 className="font-semibold mb-2 text-sm sm:text-base">Waste Saved</h3>
-          <p className="text-slate-600 text-xs sm:text-sm">TBD</p>
+          {wasteSaved ? (
+            <div className="space-y-1">
+              <p className="text-2xl font-bold text-green-600">{wasteSaved.all_time}</p>
+              <p className="text-slate-600 text-xs sm:text-sm">items used before expiration</p>
+              <p className="text-slate-500 text-xs mt-2">{wasteSaved.this_month} this month</p>
+            </div>
+          ) : (
+            <p className="text-slate-600 text-xs sm:text-sm">Loading...</p>
+          )}
         </div>
       </section>
 

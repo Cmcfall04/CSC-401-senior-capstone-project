@@ -152,7 +152,16 @@ export default function ReceiptScannerModal({ isOpen, onClose, onItemsAdded }: R
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create scan session');
+        let errorMessage = 'Failed to create scan session';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch {
+          if (response.status === 429) {
+            errorMessage = 'Too many scan session requests. Please wait a moment before trying again.';
+          }
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -233,8 +242,12 @@ export default function ReceiptScannerModal({ isOpen, onClose, onItemsAdded }: R
           const errorData = await response.json();
           errorMessage = errorData.detail || errorData.message || errorMessage;
         } catch {
-          // If response isn't JSON, use status text
-          errorMessage = response.statusText || errorMessage;
+          // If response isn't JSON, check for rate limiting
+          if (response.status === 429) {
+            errorMessage = 'Too many receipt scans. Please wait a moment before scanning another receipt.';
+          } else {
+            errorMessage = response.statusText || errorMessage;
+          }
         }
         throw new Error(errorMessage);
       }

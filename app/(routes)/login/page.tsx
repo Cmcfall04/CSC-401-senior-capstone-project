@@ -52,7 +52,11 @@ export default function LoginPage() {
           const data = await res.json();
           errorMessage = data.detail || errorMessage;
         } catch {
-          errorMessage = `Server returned ${res.status}: ${res.statusText}`;
+          if (res.status === 429) {
+            errorMessage = "Too many login attempts. Please wait a minute before trying again.";
+          } else {
+            errorMessage = `Server returned ${res.status}: ${res.statusText}`;
+          }
         }
         throw new Error(errorMessage);
       }

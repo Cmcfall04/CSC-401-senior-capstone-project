@@ -55,8 +55,16 @@ export default function SignupPage() {
       });
       
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || "Sign up failed");
+        let errorMessage = "Sign up failed";
+        try {
+          const data = await res.json();
+          errorMessage = data.detail || errorMessage;
+        } catch {
+          if (res.status === 429) {
+            errorMessage = "Too many signup attempts. Please wait a minute before trying again.";
+          }
+        }
+        throw new Error(errorMessage);
       }
       
       const data = await res.json();
