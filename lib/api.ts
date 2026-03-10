@@ -99,6 +99,20 @@ async function authenticatedFetch(
     handleAuthError(401);
     throw new Error("Authentication required. Please log in again.");
   }
+  
+  // Handle rate limiting errors with user-friendly messages
+  if (response.status === 429) {
+    let message = "Too many requests. Please wait a moment before trying again.";
+    try {
+      const data = await response.json();
+      if (data.detail) {
+        message = data.detail;
+      }
+    } catch {
+      // Use default message if JSON parsing fails
+    }
+    throw new Error(message);
+  }
 
   return response;
 }
@@ -544,6 +558,24 @@ export async function suggestExpirationDate(
 }
 
 // Helper to convert backend item to frontend format
+export interface WasteSavedResponse {
+  items_saved: number;
+  items_expiring_soon_saved: number;
+  this_month: number;
+  all_time: number;
+}
+
+export async function getWasteSaved(): Promise<WasteSavedResponse> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/waste-saved`);
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to fetch waste saved" }));
+    throw new Error(error.detail || "Failed to fetch waste saved");
+  }
+  
+  return response.json();
+}
+
 export function backendItemToFrontend(item: BackendItem) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);

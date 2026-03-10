@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Tuple
 from supabase import create_client, Client
 from fastapi import UploadFile, File
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 
 # Load environment variables from .env file if it exists
@@ -174,6 +177,37 @@ app = FastAPI(
     description="Backend API for Smart Pantry application using Supabase",
     version="1.0.0"
 )
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+# Custom rate limit exceeded handler with user-friendly messages
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """Custom handler for rate limit exceeded errors with user-friendly messages"""
+    # Determine endpoint type for specific messages
+    endpoint = request.url.path
+    
+    if "/auth/login" in endpoint:
+        message = "Too many login attempts. Please wait a minute before trying again."
+    elif "/auth/signup" in endpoint:
+        message = "Too many signup attempts. Please wait a minute before trying again."
+    elif "/receipt/scan" in endpoint:
+        message = "Too many receipt scans. Please wait a moment before scanning another receipt."
+    elif "/recipes" in endpoint:
+        message = "Too many recipe requests. Please wait a moment before searching again."
+    elif "/profile/change-password" in endpoint:
+        message = "Too many password change attempts. Please wait a minute before trying again."
+    else:
+        message = "Too many requests. Please slow down and try again in a moment."
+    
+    return Response(
+        content=json.dumps({"detail": message}),
+        status_code=429,
+        media_type="application/json"
+    )
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 # CORS configuration
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
@@ -345,7 +379,8 @@ def test_endpoint():
 
 # Authentication endpoints
 @app.post("/auth/signup")
-def signup(req: SignupRequest):
+@limiter.limit("5/minute")  # 5 signup attempts per minute per IP
+def signup(req: SignupRequest, request: Request):
     """Sign up a new user using Supabase Auth"""
     print(f"SIGNUP STARTED for {req.email}")
     logger.info(f"Signup attempt for email: {req.email}")
@@ -462,7 +497,8 @@ def signup(req: SignupRequest):
         raise HTTPException(status_code=500, detail=f"Signup failed: {error_msg}")
 
 @app.post("/auth/login")
-def login(req: LoginRequest):
+@limiter.limit("5/minute")  # 5 login attempts per minute per IP (prevents brute force)
+def login(req: LoginRequest, request: Request):
     """Login user using Supabase Auth"""
     logger.info(f"Login attempt for email: {req.email}")
     try:
@@ -505,7 +541,9 @@ def login(req: LoginRequest):
 
 # Items endpoints
 @app.get("/api/items", response_model=PaginatedItemsResponse)
+@limiter.limit("100/minute")  # 100 requests per minute per IP
 def list_items(
+    request: Request,
     user_id: Optional[str] = Depends(get_user_id),
     household_id: Optional[str] = Query(None, description="Filter by household ID"),
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
@@ -597,7 +635,8 @@ def list_items(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.get("/api/items/{item_id}", response_model=ItemResponse)
-def get_item(item_id: str, user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("100/minute")
+def get_item(item_id: str, request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Get a single item by ID"""
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -613,7 +652,8 @@ def get_item(item_id: str, user_id: Optional[str] = Depends(get_user_id)):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.post("/api/items", response_model=ItemResponse, status_code=201)
-def create_item(item_data: ItemCreate, user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("60/minute")  # 60 create requests per minute
+def create_item(item_data: ItemCreate, request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Create a new pantry item"""
     if not user_id:
         logger.warning("POST /api/items - Authentication required")
@@ -649,7 +689,8 @@ def create_item(item_data: ItemCreate, user_id: Optional[str] = Depends(get_user
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.put("/api/items/{item_id}", response_model=ItemResponse)
-def update_item(item_id: str, item_data: ItemUpdate, user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("60/minute")
+def update_item(item_id: str, item_data: ItemUpdate, request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Update an existing item"""
     if not user_id:
         logger.warning(f"PUT /api/items/{item_id} - Authentication required")
@@ -701,18 +742,52 @@ def update_item(item_id: str, item_data: ItemUpdate, user_id: Optional[str] = De
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.delete("/api/items/{item_id}", status_code=204)
-def delete_item(item_id: str, user_id: Optional[str] = Depends(get_user_id)):
-    """Delete an item"""
+@limiter.limit("60/minute")
+def delete_item(item_id: str, request: Request, user_id: Optional[str] = Depends(get_user_id)):
+    """Delete an item and track it for waste saved metrics"""
     if not user_id:
         logger.warning(f"DELETE /api/items/{item_id} - Authentication required")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     try:
-        # Check if item exists and belongs to user
-        check_response = supabase.table("items").select("id").eq("id", item_id).eq("user_id", user_id).execute()
-        if not check_response.data:
+        # Fetch full item data before deleting (for waste tracking)
+        item_response = supabase.table("items").select("*").eq("id", item_id).eq("user_id", user_id).execute()
+        if not item_response.data:
             logger.warning(f"Item {item_id} not found for user {user_id}")
             raise HTTPException(status_code=404, detail="Item not found")
+        
+        item = item_response.data[0]
+        today = date.today()
+        
+        # Determine if item was expired or expiring soon
+        was_expired = False
+        was_expiring_soon = False
+        
+        if item.get("expiration_date"):
+            exp_date = datetime.fromisoformat(item["expiration_date"].split("T")[0]).date() if isinstance(item["expiration_date"], str) else item["expiration_date"]
+            days_until_exp = (exp_date - today).days
+            
+            was_expired = days_until_exp < 0
+            was_expiring_soon = 0 <= days_until_exp <= 3
+        
+        # Log to deleted_items table for waste tracking (before deleting)
+        try:
+            deleted_item_data = {
+                "item_id": item_id,
+                "user_id": user_id,
+                "item_name": item.get("name", ""),
+                "quantity": item.get("quantity", 1),
+                "expiration_date": item.get("expiration_date"),
+                "was_expired": was_expired,
+                "was_expiring_soon": was_expiring_soon,
+                "storage_type": item.get("storage_type"),
+                "created_at": item.get("created_at")
+            }
+            supabase.table("deleted_items").insert(deleted_item_data).execute()
+            logger.info(f"Logged deleted item {item_id} to deleted_items (expired: {was_expired}, expiring soon: {was_expiring_soon})")
+        except Exception as e:
+            # Don't fail the delete if logging fails, but log the error
+            logger.warning(f"Failed to log deleted item to deleted_items: {str(e)}")
         
         # Delete the item
         logger.info(f"Deleting item {item_id} for user {user_id}")
@@ -726,8 +801,71 @@ def delete_item(item_id: str, user_id: Optional[str] = Depends(get_user_id)):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
+class WasteSavedResponse(BaseModel):
+    items_saved: int  # Number of items used before expiration
+    items_expiring_soon_saved: int  # Items used when expiring soon (3 days or less)
+    this_month: int  # Items saved this month
+    all_time: int  # Items saved all time
+
+@app.get("/api/waste-saved", response_model=WasteSavedResponse)
+@limiter.limit("60/minute")
+def get_waste_saved(
+    request: Request,
+    user_id: Optional[str] = Depends(get_user_id),
+    household_id: Optional[str] = Query(None, description="Household ID for household-level stats")
+):
+    """Get waste saved statistics for the user"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Get current month start
+        today = date.today()
+        month_start = date(today.year, today.month, 1)
+        
+        # Query deleted items that were NOT expired (waste saved)
+        # Filter by user_id and was_expired = False
+        all_saved = supabase.table("deleted_items").select("*").eq("user_id", user_id).eq("was_expired", False).execute()
+        
+        # Calculate statistics
+        all_time_count = len(all_saved.data) if all_saved.data else 0
+        
+        # Count items saved this month
+        this_month_count = 0
+        expiring_soon_count = 0
+        
+        if all_saved.data:
+            for item in all_saved.data:
+                deleted_at = item.get("deleted_at")
+                if deleted_at:
+                    # Parse deleted_at timestamp
+                    if isinstance(deleted_at, str):
+                        deleted_date = datetime.fromisoformat(deleted_at.replace("Z", "+00:00")).date()
+                    else:
+                        deleted_date = deleted_at.date() if hasattr(deleted_at, 'date') else today
+                    
+                    # Count this month
+                    if deleted_date >= month_start:
+                        this_month_count += 1
+                    
+                    # Count expiring soon
+                    if item.get("was_expiring_soon"):
+                        expiring_soon_count += 1
+        
+        return {
+            "items_saved": all_time_count,
+            "items_expiring_soon_saved": expiring_soon_count,
+            "this_month": this_month_count,
+            "all_time": all_time_count
+        }
+    except Exception as e:
+        logger.error(f"Error calculating waste saved for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error calculating waste saved: {str(e)}")
+
 @app.get("/api/items/expiring/soon", response_model=PaginatedItemsResponse)
+@limiter.limit("100/minute")
 def get_expiring_items(
+    request: Request,
     days: int = Query(7, ge=1, le=365, description="Number of days to look ahead"),
     user_id: Optional[str] = Depends(get_user_id),
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
@@ -1420,19 +1558,20 @@ def suggest_expiration_date(
         return suggested_date, confidence, None, None
 
 @app.post("/api/items/suggest-expiration", response_model=ExpirationSuggestionResponse)
-async def suggest_expiration(request: ExpirationSuggestionRequest):
+@limiter.limit("60/minute")
+async def suggest_expiration(request_data: ExpirationSuggestionRequest, request: Request):
     """
     Suggest an expiration date for an item based on its name, storage type, and optional USDA data.
     """
     try:
-        storage = request.storage_type or "pantry"
+        storage = request_data.storage_type or "pantry"
         
         # If USDA FDC ID is provided, try to get food category
-        usda_category = request.usda_food_category
-        if request.usda_fdc_id and not usda_category and USDA_API_KEY:
+        usda_category = request_data.usda_food_category
+        if request_data.usda_fdc_id and not usda_category and USDA_API_KEY:
             try:
                 # Fetch food category from USDA API
-                url = f"https://api.nal.usda.gov/fdc/v1/food/{request.usda_fdc_id}?api_key={USDA_API_KEY}"
+                url = f"https://api.nal.usda.gov/fdc/v1/food/{request_data.usda_fdc_id}?api_key={USDA_API_KEY}"
                 async with httpx.AsyncClient() as client:
                     response = await client.get(url)
                     usda_data = response.json()
@@ -1441,14 +1580,14 @@ async def suggest_expiration(request: ExpirationSuggestionRequest):
                     if food_category:
                         usda_category = food_category.get("description", "")
             except Exception as e:
-                logger.debug(f"Could not fetch USDA category for fdcId {request.usda_fdc_id}: {str(e)}")
+                logger.debug(f"Could not fetch USDA category for fdcId {request_data.usda_fdc_id}: {str(e)}")
         
         suggested_date, confidence, category, recommended_storage = suggest_expiration_date(
-            request.name,
+            request_data.name,
             storage,
-            request.purchased_date,
+            request_data.purchased_date,
             usda_category,
-            request.is_opened or False
+            request_data.is_opened or False
         )
         
         days_from_now = (suggested_date - date.today()).days if suggested_date else None
@@ -1466,7 +1605,8 @@ async def suggest_expiration(request: ExpirationSuggestionRequest):
 
 # Profile/Account endpoints
 @app.get("/api/profile", response_model=ProfileResponse)
-def get_profile(user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("60/minute")
+def get_profile(request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Get the current user's profile"""
     if not user_id:
         logger.warning("GET /api/profile - Authentication required")
@@ -1484,7 +1624,8 @@ def get_profile(user_id: Optional[str] = Depends(get_user_id)):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.put("/api/profile", response_model=ProfileResponse)
-def update_profile(profile_data: ProfileUpdate, user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("30/minute")
+def update_profile(profile_data: ProfileUpdate, request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Update the current user's profile"""
     if not user_id:
         logger.warning("PUT /api/profile - Authentication required")
@@ -1523,7 +1664,8 @@ def update_profile(profile_data: ProfileUpdate, user_id: Optional[str] = Depends
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.post("/api/profile/change-password")
-def change_password(password_data: PasswordChangeRequest, user_id: Optional[str] = Depends(get_user_id)):
+@limiter.limit("5/minute")  # Password changes should be rate limited
+def change_password(password_data: PasswordChangeRequest, request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """Change the user's password"""
     if not user_id:
         logger.warning("POST /api/profile/change-password - Authentication required")
@@ -2051,7 +2193,9 @@ async def create_item_from_usda(
 
 # Spoonacular recipe API (proxy to keep API key server-side)
 @app.get("/api/recipes/by-ingredients")
+@limiter.limit("30/minute")  # Recipe API calls are expensive, limit more strictly
 async def get_recipes_by_ingredients(
+    request: Request,
     user_id: Optional[str] = Depends(get_user_id),
     ingredients: str = Query(..., description="Comma-separated list of ingredients"),
     number: int = Query(12, ge=1, le=100, description="Number of recipes to return"),
@@ -2166,7 +2310,9 @@ async def get_recipes_by_ingredients(
 
 
 @app.post("/api/receipt/scan")
+@limiter.limit("20/minute")  # Receipt scanning is expensive (OpenAI API)
 async def scan_receipt(
+        request: Request,
         file: UploadFile = File(...),
         user_id: Optional[str] = Depends(get_user_id)
 ):
@@ -2234,15 +2380,26 @@ Return ONLY JSON array:
         content = response.choices[0].message.content
         logger.info(f"GPT-4 raw response: {content}")
 
+
         # Extract JSON from response (GPT sometimes adds extra text)
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
             content = json_match.group(0)
         else:
             logger.error(f"No JSON array found in response: {content}")
-            raise ValueError("Could not find JSON array in response")
+            raise HTTPException(
+                status_code=422,
+                detail="Could not parse receipt data. The image may be unclear or not contain a valid receipt. Please try with a clearer image."
+            )
 
-        items = json.loads(content)
+        try:
+            items = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in response: {content}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid response format from receipt scanner. Please try again with a clearer image."
+            )
 
         # Insert items into database
         added_items = []
@@ -2252,6 +2409,9 @@ Return ONLY JSON array:
                 "name": item.get("name", ""),
                 "quantity": item.get("quantity", 1)
             }
+
+            usda_fdc_id = None
+            usda_category = None
 
             # Try to get USDA data with cleaned search term
             if USDA_API_KEY:
@@ -2274,11 +2434,66 @@ Return ONLY JSON array:
                             usda_name = food.get("description", item.get('name', ''))
                             new_item["usda_fdc_id"] = fdc_id
                             new_item["name"] = usda_name
+                            usda_fdc_id = fdc_id
                             logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                            
+                            # Fetch full food details to get category
+                            try:
+                                food_detail_url = f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}?api_key={USDA_API_KEY}"
+                                food_detail_response = await client.get(food_detail_url)
+                                food_detail_data = food_detail_response.json()
+                                food_category = food_detail_data.get("foodCategory", {})
+                                if food_category:
+                                    usda_category = food_category.get("description", "")
+                                    logger.info(f"Found USDA category for '{usda_name}': {usda_category}")
+                            except Exception as e:
+                                logger.debug(f"Could not fetch USDA category for fdcId {fdc_id}: {str(e)}")
                         else:
                             logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
                 except Exception as e:
                     logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            # Suggest expiration date and storage type
+            try:
+                # First call: Get recommended storage type (using pantry as initial guess)
+                _, _, category, recommended_storage = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type="pantry",  # Initial guess, will get recommendation
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Determine storage type to use for expiration calculation
+                storage_for_calculation = recommended_storage if recommended_storage else "pantry"
+                
+                # Second call: Get expiration date using the recommended storage type
+                suggested_date, confidence, _, _ = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type=storage_for_calculation,  # Use recommended storage for accurate expiration
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Add expiration date if suggested
+                if suggested_date:
+                    new_item["expiration_date"] = suggested_date.isoformat()
+                    logger.info(f"Suggested expiration for '{new_item['name']}': {suggested_date} (confidence: {confidence}, storage: {storage_for_calculation})")
+                else:
+                    logger.info(f"No expiration suggestion for '{new_item['name']}'")
+                
+                # Use recommended storage type if available, otherwise default to pantry
+                if recommended_storage:
+                    new_item["storage_type"] = recommended_storage
+                    logger.info(f"Using recommended storage for '{new_item['name']}': {recommended_storage}")
+                else:
+                    new_item["storage_type"] = "pantry"
+                    
+            except Exception as e:
+                logger.warning(f"Expiration suggestion failed for '{new_item['name']}': {str(e)}")
+                # Default to pantry if suggestion fails
+                new_item["storage_type"] = "pantry"
 
             result = supabase.table("items").insert(new_item).execute()
             added_items.append(result.data[0])
@@ -2291,11 +2506,32 @@ Return ONLY JSON array:
         logger.error(f"Failed to parse OpenAI response: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")
     except Exception as e:
-        logger.error(f"Error scanning receipt: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error scanning receipt: {error_msg}")
+        
+        # Check for OpenAI API specific errors
+        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=429, 
+                detail="OpenAI API rate limit exceeded. Please try again later or check your API quota."
+            )
+        elif "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            raise HTTPException(
+                status_code=402,
+                detail="OpenAI API quota exhausted. Please check your API billing and usage limits."
+            )
+        elif "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="OpenAI API authentication failed. Please check your API key configuration."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Error scanning receipt: {error_msg}")
 
 @app.post("/api/receipt/create-session")
+@limiter.limit("30/minute")  # Limit session creation
 async def create_scan_session(
+    request: Request,
     user_id: Optional[str] = Depends(get_user_id)
 ):
     """Create a scan session and return a token for mobile scanning"""
@@ -2318,7 +2554,9 @@ async def create_scan_session(
 
 
 @app.post("/api/receipt/scan-mobile")
+@limiter.limit("20/minute")  # Receipt scanning is expensive
 async def scan_receipt_mobile(
+    request: Request,
     file: UploadFile = File(...),
     token: str = Query(...)
 ):
@@ -2358,7 +2596,8 @@ async def scan_receipt_mobile(
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
+                                "url": f"data:image/jpeg;base64,{base64_image}",
+                                "detail": "high"
                             }
                         }
                     ]
@@ -2377,9 +2616,23 @@ async def scan_receipt_mobile(
             content = json_match.group(0)
         else:
             logger.error(f"No JSON array found in response: {content}")
-            raise ValueError("Could not find JSON array in response")
+            scan_sessions[token]["status"] = "error"
+            scan_sessions[token]["result"] = {"error": "Could not parse receipt data. The image may be unclear or not contain a valid receipt."}
+            raise HTTPException(
+                status_code=422,
+                detail="Could not parse receipt data. The image may be unclear or not contain a valid receipt. Please try with a clearer image."
+            )
         
-        items = json.loads(content)
+        try:
+            items = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in response: {content}")
+            scan_sessions[token]["status"] = "error"
+            scan_sessions[token]["result"] = {"error": "Invalid response format from receipt scanner."}
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid response format from receipt scanner. Please try again with a clearer image."
+            )
 
         # Insert items into database
         added_items = []
@@ -2389,6 +2642,9 @@ async def scan_receipt_mobile(
                 "name": item.get("name", ""),
                 "quantity": item.get("quantity", 1)
             }
+
+            usda_fdc_id = None
+            usda_category = None
 
             # Try to get USDA data with cleaned search term
             if USDA_API_KEY:
@@ -2411,11 +2667,66 @@ async def scan_receipt_mobile(
                             usda_name = food.get("description", item.get('name', ''))
                             new_item["usda_fdc_id"] = fdc_id
                             new_item["name"] = usda_name
+                            usda_fdc_id = fdc_id
                             logger.info(f"Matched '{item.get('name')}' to USDA: '{usda_name}' (fdcId: {fdc_id})")
+                            
+                            # Fetch full food details to get category
+                            try:
+                                food_detail_url = f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}?api_key={USDA_API_KEY}"
+                                food_detail_response = await client.get(food_detail_url)
+                                food_detail_data = food_detail_response.json()
+                                food_category = food_detail_data.get("foodCategory", {})
+                                if food_category:
+                                    usda_category = food_category.get("description", "")
+                                    logger.info(f"Found USDA category for '{usda_name}': {usda_category}")
+                            except Exception as e:
+                                logger.debug(f"Could not fetch USDA category for fdcId {fdc_id}: {str(e)}")
                         else:
                             logger.info(f"No USDA match for '{item.get('name')}' (searched: '{search_name}')")
                 except Exception as e:
                     logger.warning(f"USDA lookup failed for '{item.get('name')}': {str(e)}")
+
+            # Suggest expiration date and storage type
+            try:
+                # First call: Get recommended storage type (using pantry as initial guess)
+                _, _, category, recommended_storage = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type="pantry",  # Initial guess, will get recommendation
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Determine storage type to use for expiration calculation
+                storage_for_calculation = recommended_storage if recommended_storage else "pantry"
+                
+                # Second call: Get expiration date using the recommended storage type
+                suggested_date, confidence, _, _ = suggest_expiration_date(
+                    new_item["name"],
+                    storage_type=storage_for_calculation,  # Use recommended storage for accurate expiration
+                    purchased_date=None,
+                    usda_food_category=usda_category,
+                    is_opened=False
+                )
+                
+                # Add expiration date if suggested
+                if suggested_date:
+                    new_item["expiration_date"] = suggested_date.isoformat()
+                    logger.info(f"Suggested expiration for '{new_item['name']}': {suggested_date} (confidence: {confidence}, storage: {storage_for_calculation})")
+                else:
+                    logger.info(f"No expiration suggestion for '{new_item['name']}'")
+                
+                # Use recommended storage type if available, otherwise default to pantry
+                if recommended_storage:
+                    new_item["storage_type"] = recommended_storage
+                    logger.info(f"Using recommended storage for '{new_item['name']}': {recommended_storage}")
+                else:
+                    new_item["storage_type"] = "pantry"
+                    
+            except Exception as e:
+                logger.warning(f"Expiration suggestion failed for '{new_item['name']}': {str(e)}")
+                # Default to pantry if suggestion fails
+                new_item["storage_type"] = "pantry"
 
             result = supabase.table("items").insert(new_item).execute()
             added_items.append(result.data[0])
@@ -2438,15 +2749,36 @@ async def scan_receipt_mobile(
         scan_sessions[token]["result"] = {"error": "Failed to parse receipt data"}
         raise HTTPException(status_code=500, detail="Failed to parse receipt data")
     except Exception as e:
-        logger.error(f"Error scanning receipt: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error scanning receipt: {error_msg}")
         scan_sessions[token]["status"] = "error"
-        scan_sessions[token]["result"] = {"error": str(e)}
-        raise HTTPException(status_code=500, detail=f"Error scanning receipt: {str(e)}")
+        scan_sessions[token]["result"] = {"error": error_msg}
+        
+        # Check for OpenAI API specific errors
+        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=429, 
+                detail="OpenAI API rate limit exceeded. Please try again later or check your API quota."
+            )
+        elif "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            raise HTTPException(
+                status_code=402,
+                detail="OpenAI API quota exhausted. Please check your API billing and usage limits."
+            )
+        elif "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="OpenAI API authentication failed. Please check your API key configuration."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Error scanning receipt: {error_msg}")
 
 
 @app.get("/api/receipt/scan-result/{token}")
+@limiter.limit("60/minute")  # Polling endpoint, allow more frequent requests
 async def get_scan_result(
     token: str,
+    request: Request,
     user_id: Optional[str] = Depends(get_user_id)
 ):
     """Get scan result by token"""
