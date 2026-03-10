@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getProfile, updateProfile, changePassword, getProfileStats, type Profile, type ProfileStats } from "@/lib/api";
+import { getProfile, updateProfile, changePassword, getProfileStats, getNotificationPreferences, updateNotificationPreferences, deleteNotificationPreferences, sendExpirationReminder, type Profile, type ProfileStats } from "@/lib/api";
 
 export default function AccountSettings() {
   const router = useRouter();
@@ -23,7 +23,7 @@ export default function AccountSettings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   
   // Active tab
-  const [activeTab, setActiveTab] = useState<"profile" | "password" | "households" | "stats">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "password" | "households" | "stats" | "notifications">("profile");
   
   // Household states
   const [households, setHouseholds] = useState<any[]>([]);
@@ -33,21 +33,36 @@ export default function AccountSettings() {
   const [householdMembers, setHouseholdMembers] = useState<any[]>([]);
   const [editingHouseholdName, setEditingHouseholdName] = useState("");
 
+  // Notification preferences (expiration reminders – email only)
+  const [notificationEmail, setNotificationEmail] = useState("");
+  const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [notificationSuccess, setNotificationSuccess] = useState(false);
+  const [notificationPrefsLoaded, setNotificationPrefsLoaded] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
+  const [reminderMessage, setReminderMessage] = useState<string | null>(null);
+  const [cancellingNotifications, setCancellingNotifications] = useState(false);
+  const [notificationCancelSuccess, setNotificationCancelSuccess] = useState(false);
+
   // Load profile data
   useEffect(() => {
     async function loadData() {
       try {
         setLoading(true);
         setError(null);
-        const [profileData, statsData] = await Promise.all([
+        const [profileData, statsData, prefsData] = await Promise.all([
           getProfile(),
           getProfileStats(),
+          getNotificationPreferences(),
         ]);
         setProfile(profileData);
         setStats(statsData);
         setName(profileData.name || "");
         setEmail(profileData.email || "");
-        
+        let email = prefsData.channel === "email" ? (prefsData.contact || "") : "";
+        if (!email && profileData.email) email = profileData.email;
+        setNotificationEmail(email);
+        setNotificationPrefsLoaded(true);
         // Load households
         await loadHouseholds();
       } catch (err) {
@@ -141,6 +156,62 @@ export default function AccountSettings() {
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update household');
+    }
+  };
+
+  const isValidNotificationEmail = (value: string) => /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(value.trim());
+
+  const handleNotificationSave = async () => {
+    setNotificationError(null);
+    setNotificationSuccess(false);
+    const email = notificationEmail.trim();
+    if (!email) {
+      setNotificationError("Please enter your email address.");
+      return;
+    }
+    if (!isValidNotificationEmail(email)) {
+      setNotificationError("Please enter a valid email address.");
+      return;
+    }
+    setNotificationSaving(true);
+    try {
+      await updateNotificationPreferences({ channel: "email", contact: email });
+      setNotificationSuccess(true);
+      setTimeout(() => setNotificationSuccess(false), 3000);
+    } catch (err) {
+      setNotificationError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setNotificationSaving(false);
+    }
+  };
+
+  const handleSendReminderNow = async () => {
+    setReminderMessage(null);
+    setSendingReminder(true);
+    try {
+      const res = await sendExpirationReminder(7);
+      setReminderMessage(res.sent ? "Reminder sent!" : res.message || "No items expiring in the next 7 days, or email is not configured.");
+      setTimeout(() => setReminderMessage(null), 5000);
+    } catch (err) {
+      setReminderMessage(err instanceof Error ? err.message : "Failed to send reminder");
+    } finally {
+      setSendingReminder(false);
+    }
+  };
+
+  const handleCancelNotifications = async () => {
+    setNotificationError(null);
+    setNotificationSuccess(false);
+    setCancellingNotifications(true);
+    try {
+      await deleteNotificationPreferences();
+      setNotificationEmail("");
+      setNotificationCancelSuccess(true);
+      setTimeout(() => setNotificationCancelSuccess(false), 4000);
+    } catch (err) {
+      setNotificationError(err instanceof Error ? err.message : "Failed to cancel notifications");
+    } finally {
+      setCancellingNotifications(false);
     }
   };
 
@@ -258,6 +329,16 @@ export default function AccountSettings() {
             }`}
           >
             Statistics
+          </button>
+          <button
+            onClick={() => setActiveTab("notifications")}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === "notifications"
+                ? "border-green-600 text-green-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
+          >
+            Notifications
           </button>
         </nav>
       </div>
@@ -493,6 +574,75 @@ export default function AccountSettings() {
               </button>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Notifications Tab */}
+      {activeTab === "notifications" && (
+        <div className="card p-6">
+          <h2 className="text-xl font-semibold mb-2">Notifications</h2>
+          <p className="text-gray-600 text-sm mb-4">Get an email when pantry items are close to expiring.</p>
+          {notificationPrefsLoaded ? (
+            <div className="flex flex-col gap-3 max-w-md">
+              <input
+                type="email"
+                value={notificationEmail}
+                onChange={(e) => {
+                  setNotificationEmail(e.target.value);
+                  setNotificationError(null);
+                }}
+                placeholder="you@example.com"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none text-sm"
+                maxLength={255}
+                aria-label="Email for expiration notifications"
+              />
+              {notificationError && (
+                <p className="text-sm text-red-600" role="alert">{notificationError}</p>
+              )}
+              {notificationSuccess && (
+                <p className="text-sm text-green-600" role="status">Saved. You&apos;ll get notified by email when items are close to expiring.</p>
+              )}
+              {notificationCancelSuccess && (
+                <p className="text-sm text-green-600" role="status">Notifications stopped. You won&apos;t receive expiration reminder emails.</p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleNotificationSave}
+                  disabled={notificationSaving || !notificationEmail.trim()}
+                  className="px-6 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {notificationSaving ? "Saving..." : "Save notification preference"}
+                </button>
+                {notificationEmail.trim() && (
+                  <button
+                    type="button"
+                    onClick={handleSendReminderNow}
+                    disabled={sendingReminder}
+                    className="px-6 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg font-medium hover:bg-gray-50 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {sendingReminder ? "Sending..." : "Send reminder now (next 7 days)"}
+                  </button>
+                )}
+              </div>
+              {reminderMessage && (
+                <p className="text-sm text-gray-600" role="status">{reminderMessage}</p>
+              )}
+              <div className="pt-2 border-t border-gray-200 mt-2">
+                <button
+                  type="button"
+                  onClick={handleCancelNotifications}
+                  disabled={cancellingNotifications}
+                  className="text-sm text-gray-500 hover:text-red-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {cancellingNotifications ? "Cancelling..." : "Stop notifications"}
+                </button>
+                <p className="text-xs text-gray-400 mt-1">You will no longer receive expiration reminder emails.</p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-gray-500 text-sm">Loading...</p>
+          )}
         </div>
       )}
 

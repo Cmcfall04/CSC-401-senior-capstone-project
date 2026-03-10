@@ -406,6 +406,78 @@ export async function updateProfile(profile: ProfileUpdate): Promise<Profile> {
   return response.json();
 }
 
+// Expiration notification preferences (Notify me when items are close to expire)
+export type NotificationChannel = "email" | "sms";
+
+export interface NotificationPreferences {
+  channel: NotificationChannel | null;
+  contact: string | null;
+}
+
+export interface NotificationPreferencesUpdate {
+  channel: NotificationChannel;
+  contact: string;
+}
+
+export async function getNotificationPreferences(): Promise<NotificationPreferences> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/notification-preferences`, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to load notification preferences" }));
+    throw new Error(error.detail || "Failed to load notification preferences");
+  }
+
+  return response.json();
+}
+
+export async function updateNotificationPreferences(
+  data: NotificationPreferencesUpdate
+): Promise<NotificationPreferences> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/notification-preferences`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to save notification preferences" }));
+    throw new Error(error.detail || "Failed to save notification preferences");
+  }
+
+  return response.json();
+}
+
+/** Stop expiration reminder emails (removes user from notifications). */
+export async function deleteNotificationPreferences(): Promise<{ message: string }> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/notification-preferences`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to cancel notifications" }));
+    throw new Error(error.detail || "Failed to cancel notifications");
+  }
+
+  return response.json();
+}
+
+/** Request to send expiration reminder (for items expiring within N days). */
+export async function sendExpirationReminder(days?: number): Promise<{ message: string; sent: number; channel?: string }> {
+  const params = days != null ? `?days=${days}` : "";
+  const response = await authenticatedFetch(
+    `${API_BASE_URL}/api/notifications/send-expiration-reminders${params}`,
+    { method: "POST" }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to send reminder" }));
+    throw new Error(error.detail || "Failed to send reminder");
+  }
+
+  return response.json();
+}
+
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   const response = await authenticatedFetch(`${API_BASE_URL}/api/profile/change-password`, {
     method: "POST",

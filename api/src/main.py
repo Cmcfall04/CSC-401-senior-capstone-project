@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from supabase import create_client, Client
 from fastapi import UploadFile, File
 
@@ -112,6 +112,43 @@ class ExpirationSuggestionResponse(BaseModel):
 
 class JoinHouseholdRequest(BaseModel):
     household_id: str
+
+
+# Expiration notification preferences (email or SMS)
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def _validate_email(value: str) -> bool:
+    return bool(EMAIL_REGEX.match(value.strip()))
+
+
+def _validate_phone(value: str) -> bool:
+    digits = "".join(c for c in value.strip() if c.isdigit())
+    if digits.startswith("1") and len(digits) == 11:
+        digits = digits[1:]
+    # US: area code and exchange cannot start with 0 or 1 (must be 2-9)
+    return len(digits) == 10 and digits[0] in "23456789" and digits[3] in "23456789"
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    channel: str  # "email" or "sms"
+    contact: str  # email address or phone number
+
+    def validate_contact(self) -> None:
+        if self.channel == "email":
+            if not _validate_email(self.contact):
+                raise ValueError("Please enter a valid email address")
+        elif self.channel == "sms":
+            if not _validate_phone(self.contact):
+                raise ValueError("Please enter a valid 10-digit US phone number")
+        else:
+            raise ValueError("Channel must be 'email' or 'sms'")
+
+
+class NotificationPreferencesResponse(BaseModel):
+    channel: Optional[str] = None
+    contact: Optional[str] = None
+
 
 class ItemResponse(BaseModel):
     id: str
@@ -253,9 +290,14 @@ def get_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
         pass
     return None
 
+# Scheduler for daily expiration reminders (one instance per process)
+_expiration_scheduler = None
+
+
 @app.on_event("startup")
 def startup():
     """Initialize application on startup"""
+    global _expiration_scheduler
     logger.info("Starting Smart Pantry API...")
     logger.info(f"Supabase URL: {SUPABASE_URL[:30]}...")  # Log partial URL for security
     logger.info(f"CORS allowed origins: {allowed_origins}")
@@ -269,7 +311,32 @@ def startup():
     except Exception as e:
         logger.error(f"✗ Supabase connection failed: {e}")
     
+    # Daily expiration reminder job (e.g. 9:00 AM local time; set via env for production)
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        hour = int(os.getenv("EXPIRATION_REMINDER_HOUR", "9"))
+        minute = int(os.getenv("EXPIRATION_REMINDER_MINUTE", "0"))
+        _expiration_scheduler = BackgroundScheduler()
+        _expiration_scheduler.add_job(_run_daily_expiration_reminders, "cron", hour=hour, minute=minute, id="expiration_reminders")
+        _expiration_scheduler.start()
+        logger.info(f"✓ Expiration reminder job scheduled daily at {hour:02d}:{minute:02d}")
+    except Exception as e:
+        logger.warning(f"Could not start expiration reminder scheduler: {e}")
+    
     logger.info("API startup complete. Ready to handle requests.")
+
+
+@app.on_event("shutdown")
+def shutdown():
+    """Clean up on shutdown"""
+    global _expiration_scheduler
+    if _expiration_scheduler is not None:
+        try:
+            _expiration_scheduler.shutdown(wait=False)
+            logger.info("Expiration reminder scheduler stopped")
+        except Exception as e:
+            logger.warning(f"Error stopping scheduler: {e}")
+        _expiration_scheduler = None
 
 @app.get("/test")
 def test_endpoint():
@@ -1559,6 +1626,238 @@ def change_password(password_data: PasswordChangeRequest, user_id: Optional[str]
                 detail="Password change is currently unavailable. Please use the 'Forgot Password' feature or contact support."
             )
         raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
+
+
+# Expiration notification preferences (Notify me when items are close to expire)
+@app.get("/api/notification-preferences", response_model=NotificationPreferencesResponse)
+def get_notification_preferences(user_id: Optional[str] = Depends(get_user_id)):
+    """Get the current user's expiration notification preferences (email or SMS)."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        response = supabase.table("expiration_notification_preferences").select("channel", "contact").eq("user_id", user_id).limit(1).execute()
+        if not response.data:
+            return NotificationPreferencesResponse(channel=None, contact=None)
+        row = response.data[0]
+        return NotificationPreferencesResponse(channel=row.get("channel"), contact=row.get("contact"))
+    except Exception as e:
+        logger.error(f"Error fetching notification preferences for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to load notification preferences")
+
+
+@app.delete("/api/notification-preferences")
+def delete_notification_preferences(user_id: Optional[str] = Depends(get_user_id)):
+    """Remove the user from expiration notifications (they will no longer receive reminder emails)."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        supabase.table("expiration_notification_preferences").delete().eq("user_id", user_id).execute()
+        return {"message": "Notifications cancelled. You will no longer receive expiration reminder emails."}
+    except Exception as e:
+        logger.error(f"Error deleting notification preferences for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to cancel notifications")
+
+
+@app.put("/api/notification-preferences", response_model=NotificationPreferencesResponse)
+def update_notification_preferences(data: NotificationPreferencesUpdate, user_id: Optional[str] = Depends(get_user_id)):
+    """Set expiration notification to email or SMS. Contact is validated (email format or US phone)."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    channel = (data.channel or "").strip().lower()
+    if channel != "email":
+        raise HTTPException(status_code=400, detail="Only email notifications are supported")
+    contact = (data.contact or "").strip()
+    if not contact:
+        raise HTTPException(status_code=400, detail="Email address is required")
+    try:
+        data.validate_contact()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    now = datetime.utcnow().isoformat()
+    try:
+        existing = supabase.table("expiration_notification_preferences").select("user_id").eq("user_id", user_id).limit(1).execute()
+        if existing.data and len(existing.data) > 0:
+            supabase.table("expiration_notification_preferences").update(
+                {"channel": channel, "contact": contact, "updated_at": now}
+            ).eq("user_id", user_id).execute()
+        else:
+            supabase.table("expiration_notification_preferences").insert(
+                {"user_id": user_id, "channel": channel, "contact": contact, "created_at": now, "updated_at": now}
+            ).execute()
+        return NotificationPreferencesResponse(channel=channel, contact=contact)
+    except Exception as e:
+        logger.error(f"Error saving notification preferences for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save notification preferences")
+
+
+def _send_expiration_reminders_for_user(user_id: str, days: int = 7) -> Tuple[bool, str]:
+    """
+    Send expiration reminder for one user (email or SMS). Returns (sent: bool, message: str).
+    Used by both the API endpoint and the daily scheduled job.
+    """
+    today = date.today()
+    future_date = today + timedelta(days=days)
+    try:
+        prefs_response = supabase.table("expiration_notification_preferences").select("user_id", "channel", "contact").eq("user_id", user_id).limit(1).execute()
+        if not prefs_response.data:
+            return (False, "No notification preferences set")
+        prefs = prefs_response.data[0]
+        channel = prefs.get("channel")
+        contact = prefs.get("contact")
+        if not channel or not contact:
+            return (False, "Notification preferences incomplete")
+        items_response = supabase.table("items").select("id", "name", "expiration_date").eq("user_id", user_id).not_.is_("expiration_date", "null").gte("expiration_date", today.isoformat()).lte("expiration_date", future_date.isoformat()).order("expiration_date").execute()
+        expiring_items = items_response.data or []
+        if not expiring_items:
+            return (False, "No items expiring soon")
+        item_list = ", ".join(f"{i['name']} (expires {i['expiration_date']})" for i in expiring_items)
+        message = f"SmartPantry: The following items in your pantry are close to expiring: {item_list}. Use them soon to reduce waste!"
+        sent = False
+        if channel == "email":
+            sent = _send_expiration_email(contact, expiring_items)
+        else:
+            sent = _send_expiration_sms(contact, message)
+        return (sent, "Reminder sent" if sent else "Reminder logged (email/SMS not configured)")
+    except Exception as e:
+        logger.error(f"Error sending expiration reminders for user {user_id}: {str(e)}")
+        return (False, str(e))
+
+
+def _run_daily_expiration_reminders() -> None:
+    """Called by the scheduler: send expiration reminders to all users who have preferences set."""
+    try:
+        prefs_response = supabase.table("expiration_notification_preferences").select("user_id").execute()
+        user_ids = [row["user_id"] for row in (prefs_response.data or [])]
+        if not user_ids:
+            logger.info("Expiration reminder job: no users with notification preferences")
+            return
+        sent_count = 0
+        for uid in user_ids:
+            sent, _ = _send_expiration_reminders_for_user(uid, days=7)
+            if sent:
+                sent_count += 1
+        logger.info(f"Expiration reminder job: sent {sent_count} reminder(s) to {len(user_ids)} user(s)")
+    except Exception as e:
+        logger.error(f"Expiration reminder job failed: {e}", exc_info=True)
+
+
+@app.post("/api/notifications/send-expiration-reminders")
+def send_expiration_reminders(
+    days: int = Query(7, ge=1, le=30, description="Notify for items expiring within this many days"),
+    user_id: Optional[str] = Depends(get_user_id),
+):
+    """
+    Send expiration reminders for the authenticated user.
+    Also run automatically daily via in-app scheduler for all users with preferences.
+    """
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        sent, msg = _send_expiration_reminders_for_user(user_id, days=days)
+        prefs_response = supabase.table("expiration_notification_preferences").select("channel").eq("user_id", user_id).limit(1).execute()
+        channel = (prefs_response.data[0].get("channel") if prefs_response.data and len(prefs_response.data) > 0 else None)
+        return {"message": msg, "sent": 1 if sent else 0, "channel": channel}
+    except Exception as e:
+        logger.error(f"Error sending expiration reminders for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send reminders")
+
+
+def _send_expiration_email(to_email: str, expiring_items: List[Dict]) -> bool:
+    """Send expiration reminder email (HTML + plain). Uses SMTP if configured; otherwise logs. Returns True if sent."""
+    from html import escape as html_escape
+
+    subject = "SmartPantry: Items in your pantry are close to expiring"
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    # Plain text fallback
+    item_list = ", ".join(f"{i.get('name', '')} (expires {i.get('expiration_date', '')})" for i in expiring_items)
+    plain_body = f"SmartPantry: The following items in your pantry are close to expiring:\n\n{item_list}\n\nUse them soon to reduce waste!"
+
+    # HTML email body (inline styles for email client compatibility)
+    rows = "".join(
+        f"""
+        <tr>
+          <td style="padding:12px 16px; border-bottom:1px solid #e5e7eb; font-size:15px; color:#1f2937;">{html_escape(str(i.get("name", "")))}</td>
+          <td style="padding:12px 16px; border-bottom:1px solid #e5e7eb; font-size:15px; color:#6b7280; white-space:nowrap;">{html_escape(str(i.get("expiration_date", "")))}</td>
+        </tr>"""
+        for i in expiring_items
+    )
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0; padding:0; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color:#f3f4f6;">
+  <div style="max-width:520px; margin:0 auto; padding:32px 20px;">
+    <div style="background:#ffffff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.08); overflow:hidden;">
+      <div style="background:linear-gradient(135deg, #22c55e 0%, #16a34a 100%); padding:24px 28px; text-align:center;">
+        <h1 style="margin:0; font-size:22px; font-weight:700; color:#ffffff; letter-spacing:-0.02em;">SmartPantry</h1>
+        <p style="margin:8px 0 0; font-size:14px; color:rgba(255,255,255,0.9);">Expiration reminder</p>
+      </div>
+      <div style="padding:28px;">
+        <p style="margin:0 0 20px; font-size:16px; line-height:1.5; color:#374151;">These items in your pantry are close to expiring. Use them soon to reduce waste.</p>
+        <table style="width:100%; border-collapse:collapse; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">
+          <thead>
+            <tr style="background:#f9fafb;">
+              <th style="padding:12px 16px; text-align:left; font-size:12px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em;">Item</th>
+              <th style="padding:12px 16px; text-align:left; font-size:12px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em;">Expires</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows}
+          </tbody>
+        </table>
+        <p style="margin:24px 0 0; font-size:14px; color:#9ca3af;">You received this because you signed up for expiration reminders in SmartPantry.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    if smtp_host and smtp_user and smtp_password:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = smtp_user
+            msg["To"] = to_email
+            msg.attach(MIMEText(plain_body, "plain"))
+            msg.attach(MIMEText(html_body.strip(), "html"))
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_user, [to_email], msg.as_string())
+            logger.info(f"Expiration reminder email sent to {to_email}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send expiration email to {to_email}: {str(e)}")
+            raise
+    logger.info(f"[Expiration email not configured] Would send to {to_email}: {subject} - {plain_body[:200]}...")
+    return False
+
+
+def _send_expiration_sms(to_phone: str, body: str) -> bool:
+    """Send expiration reminder SMS. Uses Twilio if configured; otherwise logs. Returns True if sent."""
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_PHONE_NUMBER")
+    if account_sid and auth_token and from_number:
+        try:
+            from twilio.rest import Client
+            client = Client(account_sid, auth_token)
+            to_e164 = f"+1{to_phone}" if len(to_phone) == 10 else to_phone
+            client.messages.create(body=body, from_=from_number, to=to_e164)
+            logger.info(f"Expiration reminder SMS sent to {to_e164}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send expiration SMS to {to_phone}: {str(e)}")
+            raise
+    logger.info(f"[Expiration SMS not configured] Would send to +1{to_phone}: {body[:100]}...")
+    return False
 
 
 @app.get("/api/profile/stats")

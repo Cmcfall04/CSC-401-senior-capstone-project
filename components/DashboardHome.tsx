@@ -90,7 +90,7 @@ export default function DashboardHome() {
   useEffect(() => {
     fetchHouseholds();
   }, []);
-  
+
   useEffect(() => {
     if (selectedHousehold) {
       fetchItems();
