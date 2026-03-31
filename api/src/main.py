@@ -7,6 +7,7 @@ import time
 import httpx
 import uuid
 import jwt as pyjwt
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from uuid import UUID
 from pathlib import Path
@@ -179,10 +180,20 @@ class PaginatedItemsResponse(BaseModel):
     page_size: int
     total_pages: int
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    startup()
+    try:
+        yield
+    finally:
+        shutdown()
+
+
 app = FastAPI(
     title="Smart Pantry API",
     description="Backend API for Smart Pantry application using Supabase",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Initialize rate limiter
@@ -368,7 +379,6 @@ def get_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
 _expiration_scheduler = None
 
 
-@app.on_event("startup")
 def startup():
     """Initialize application on startup"""
     global _expiration_scheduler
@@ -400,7 +410,6 @@ def startup():
     logger.info("API startup complete. Ready to handle requests.")
 
 
-@app.on_event("shutdown")
 def shutdown():
     """Clean up on shutdown"""
     global _expiration_scheduler
