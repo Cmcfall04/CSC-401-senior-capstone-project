@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [pw, setPw] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -32,9 +33,17 @@ export default function LoginPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reset") === "success") {
+      setInfo("Password updated successfully. Please log in with your new password.");
+    }
+  }, []);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
+    setInfo(null);
     setLoading(true);
 
     try {
@@ -131,7 +140,7 @@ export default function LoginPage() {
               />
               <span className="ml-2 text-sm text-gray-700">Remember me</span>
             </label>
-            <Link href="#" className="text-sm text-green-600 hover:text-green-700">
+            <Link href="/forgot-password" className="text-sm text-green-600 hover:text-green-700">
               Forgot password?
             </Link>
           </div>
@@ -145,6 +154,7 @@ export default function LoginPage() {
             {loading ? "Logging in..." : "Log in"}
           </button>
 
+          {info && <p className="text-sm text-green-700 text-center">{info}</p>}
           {err && <p className="text-sm text-red-600 text-center">{err}</p>}
         </form>
 

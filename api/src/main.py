@@ -69,6 +69,10 @@ class SignupRequest(BaseModel):
     email: str
     password: str
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
 class ItemCreate(BaseModel):
     name: str
     quantity: int = 1
@@ -537,6 +541,35 @@ def login(req: LoginRequest, request: Request):
         if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
             raise HTTPException(status_code=401, detail="Invalid email or password")
         raise HTTPException(status_code=500, detail=f"Login failed: {error_msg}")
+
+
+@app.post("/auth/forgot-password")
+@limiter.limit("5/minute")
+def forgot_password(req: ForgotPasswordRequest, request: Request):
+    """Send a password reset email via Supabase Auth."""
+    email = req.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    frontend_url = (
+        os.getenv("NEXT_PUBLIC_FRONTEND_URL")
+        or os.getenv("FRONTEND_URL")
+        or "http://localhost:3000"
+    )
+    redirect_to = f"{frontend_url.rstrip('/')}/reset-password"
+
+    try:
+        supabase.auth.reset_password_for_email(
+            email,
+            {"redirect_to": redirect_to}
+        )
+    except Exception as e:
+        # Keep response generic so we do not leak account existence details.
+        logger.warning(f"Forgot password request issue for {email}: {e}")
+
+    return {
+        "message": "If an account exists for that email, a reset link has been sent."
+    }
 
 
 # Items endpoints
