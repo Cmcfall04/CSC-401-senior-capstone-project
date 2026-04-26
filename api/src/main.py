@@ -53,11 +53,14 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # In-memory store for scan sessions (in production, use Redis or database)
 scan_sessions: Dict[str, Dict] = {}
+_SCAN_SESSION_TTL_SEC = 600
+_SCAN_SESSION_MAX = 500
 
 # Simple in-memory token validation cache to reduce Supabase API calls
 # Format: token -> (user_id, expiry_timestamp)
 _token_cache: Dict[str, Tuple[str, float]] = {}
 _TOKEN_CACHE_TTL = 300  # 5 minutes
+_TOKEN_CACHE_MAX_ENTRIES = 2048
 
 # Configure logging
 logging.basicConfig(
@@ -249,6 +252,8 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         message = "Too many receipt scans. Please wait a moment before scanning another receipt."
     elif "/recipes" in endpoint:
         message = "Too many recipe requests. Please wait a moment before searching again."
+    elif "/food/search" in endpoint:
+        message = "Too many food search requests. Please wait a moment before searching again."
     elif "/profile/change-password" in endpoint:
         message = "Too many password change attempts. Please wait a minute before trying again."
     else:
@@ -402,6 +407,7 @@ def get_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
             if user_response and user_response.user:
                 user_id = str(user_response.user.id)
                 _token_cache[token] = (user_id, now + _TOKEN_CACHE_TTL)
+                _trim_token_cache()
                 return user_id
         except Exception:
             pass
@@ -409,6 +415,61 @@ def get_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
         return None
     except Exception:
         return None
+
+
+def _admin_email_allowlist() -> frozenset:
+    raw = os.getenv("ADMIN_EMAILS", "") or ""
+    return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
+
+
+def require_admin(user_id: str) -> None:
+    allow = _admin_email_allowlist()
+    if not allow:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access is not configured. Set ADMIN_EMAILS in the server environment.",
+        )
+    try:
+        r = supabase.table("profiles").select("email").eq("id", user_id).limit(1).execute()
+        email = (r.data[0].get("email") or "").strip().lower() if r.data else ""
+    except Exception:
+        email = ""
+    if email not in allow:
+        raise HTTPException(status_code=403, detail="Admin access denied")
+
+
+def _prune_scan_sessions() -> None:
+    """Drop expired scan tokens and cap dict size (best-effort; CPython dict order = insertion order)."""
+    now = datetime.now(timezone.utc)
+    stale: List[str] = []
+    for token, session in list(scan_sessions.items()):
+        created_raw = session.get("created_at")
+        if not created_raw:
+            stale.append(token)
+            continue
+        try:
+            s = str(created_raw).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if (now - dt).total_seconds() > _SCAN_SESSION_TTL_SEC:
+                stale.append(token)
+        except Exception:
+            stale.append(token)
+    for t in stale:
+        scan_sessions.pop(t, None)
+    while len(scan_sessions) > _SCAN_SESSION_MAX:
+        scan_sessions.pop(next(iter(scan_sessions)))
+
+
+def _trim_token_cache() -> None:
+    now = time.time()
+    expired_tokens = [t for t, (_, exp) in _token_cache.items() if now >= exp]
+    for t in expired_tokens:
+        _token_cache.pop(t, None)
+    while len(_token_cache) > _TOKEN_CACHE_MAX_ENTRIES:
+        _token_cache.pop(next(iter(_token_cache)))
+
 
 # Scheduler for daily expiration reminders (one instance per process)
 _expiration_scheduler = None
@@ -2393,19 +2454,31 @@ def get_profile_stats(user_id: Optional[str] = Depends(get_user_id)):
 
 # USDA Food API endpoints
 @app.get("/api/food/search")
-async def search_food(query: str):
+@limiter.limit("30/minute")
+async def search_food(
+    request: Request,
+    query: str,
+    user_id: Optional[str] = Depends(get_user_id),
+):
     """Search USDA FoodData Central for foods"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    q = (query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is required")
+    if len(q) > 200:
+        raise HTTPException(status_code=400, detail="query must be at most 200 characters")
     if not USDA_API_KEY:
         raise HTTPException(status_code=500, detail="USDA API key not configured")
     
-    logger.info(f"Searching USDA API for: {query}")
+    logger.info(f"Searching USDA API for: {q}")
     try:
-        url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={query}&pageSize=10&api_key={USDA_API_KEY}"
+        url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={q}&pageSize=10&api_key={USDA_API_KEY}"
         async with httpx.AsyncClient() as client:
             response = await client.get(url)
             data = response.json()
             foods = data.get("foods", [])
-            logger.info(f"Found {len(foods)} results for query: {query}")
+            logger.info(f"Found {len(foods)} results for query: {q}")
             return foods
     except Exception as e:
         logger.error(f"Error searching USDA API: {str(e)}")
@@ -2903,6 +2976,8 @@ async def create_scan_session(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     
+    _prune_scan_sessions()
+
     # Generate unique token
     token = str(uuid.uuid4())
     
@@ -2910,7 +2985,7 @@ async def create_scan_session(
     scan_sessions[token] = {
         "user_id": user_id,
         "status": "pending",
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "result": None
     }
     
@@ -2926,6 +3001,7 @@ async def scan_receipt_mobile(
     token: str = Query(...)
 ):
     """Scan receipt from mobile device using token"""
+    _prune_scan_sessions()
     if token not in scan_sessions:
         raise HTTPException(status_code=404, detail="Invalid scan token")
     
@@ -3164,6 +3240,7 @@ async def get_scan_result(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     
+    _prune_scan_sessions()
     if token not in scan_sessions:
         raise HTTPException(status_code=404, detail="Scan session not found")
     
@@ -3316,11 +3393,19 @@ def update_household(
 
 # Admin endpoints for user management
 @app.delete("/api/admin/users/{user_email}")
-def delete_user_by_email(user_email: str):
+@limiter.limit("30/minute")
+def delete_user_by_email(
+    request: Request,
+    user_email: str,
+    user_id: Optional[str] = Depends(get_user_id),
+):
     """
     Admin endpoint to delete a user by email.
     Deletes user from Supabase Auth and all related data.
     """
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    require_admin(user_id)
     try:
         # Find user by email using Supabase Auth admin API
         # First, try to get user by email using REST API
@@ -3394,11 +3479,15 @@ def delete_user_by_email(user_email: str):
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.")
 
 @app.get("/api/admin/users")
-def list_all_users():
+@limiter.limit("30/minute")
+def list_all_users(request: Request, user_id: Optional[str] = Depends(get_user_id)):
     """
     Admin endpoint to list all users.
     Shows users from both Supabase Auth and profiles table.
     """
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    require_admin(user_id)
     try:
         import httpx
         

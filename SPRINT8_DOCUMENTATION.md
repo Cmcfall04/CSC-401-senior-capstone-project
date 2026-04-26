@@ -41,6 +41,24 @@ Sprint 8 was scoped in `suggested_sprint8_implementations.md`: shopping list fea
 |------|--------|
 | `api/src/main.py` | Replaced `datetime.utcnow().isoformat()` (and similar) with `datetime.now(timezone.utc).isoformat()` for pantry updates, shopping-list updates, profile updates, and related paths. Removes `DeprecationWarning` under pytest / modern Python. |
 
+### Tier 1.1 — Security: admin API, food search, and in-memory cache bounds (Creed, 2026-04-26)
+
+**Goal:** Close unauthenticated admin and USDA proxy abuse; cap receipt-session and JWT-validation cache growth.
+
+| Area | File(s) | Change |
+|------|---------|--------|
+| Admin allow-list | `api/src/main.py` | `GET /api/admin/users` and `DELETE /api/admin/users/{user_email}` require `Authorization`, `require_admin(user_id)` against **`ADMIN_EMAILS`** (comma-separated profile emails, case-insensitive). Empty allow-list → **403** (“not configured”). **30/minute** SlowAPI limit per IP. |
+| USDA food search | `api/src/main.py` | `GET /api/food/search` requires auth (**401** without JWT), **30/minute** limit, query stripped with max length **200** (**400** if empty or too long). |
+| USDA search UI | `components/AddItemModal.tsx`, `components/EditItemModal.tsx` | **Creed:** USDA typeahead calls use `getAuthToken()` and send `Authorization: Bearer`. Edit modal parses the JSON array the API returns (same shape as add). |
+| Receipt sessions | `api/src/main.py` | **`scan_sessions`:** TTL **600s**, max **500** entries; `_prune_scan_sessions()` on create-session, mobile scan, and scan-result poll. New sessions use UTC `created_at`. **Receipt scan-result user binding** was already implemented (session `user_id` vs caller); verified, not reimplemented. |
+| JWT fallback cache | `api/src/main.py` | **`_token_cache`:** after insert, trim expired entries and cap at **2048** keys. |
+
+**Configure:** Set `ADMIN_EMAILS` in the API environment (e.g. `.env`) to one or more Supabase `profiles.email` values that may call admin routes.
+
+| File | Change |
+|------|--------|
+| `api/tests/test_admin_and_food_search.py` | **Creed:** `GET /api/admin/users` **401** without auth, **403** when JWT user’s profile email is not in `ADMIN_EMAILS`; `GET /api/food/search` **401** without auth; **400** when query length exceeds 200 characters. |
+
 ### Tier 1.2 — Shopping list (flagship feature)
 
 **Goal:** Household-scoped shopping list CRUD, wired from pantry to the Shopping page, with the existing store locator kept below the list.
@@ -71,16 +89,16 @@ Sprint 8 was scoped in `suggested_sprint8_implementations.md`: shopping list fea
 |------|--------|
 | `api/tests/test_shopping_list_crud.py` | `GET/POST/PUT/DELETE` shopping-list routes plus `GET` **401** without `Authorization`; uses `TestClient`, `dependency_overrides` for `get_user_id`, and ordered `supabase.table` mocks. |
 
-**Still open vs `suggested_sprint8_implementations.md` §2.5:** `test_admin_requires_auth`, `test_items_crud_roundtrip`, `test_household_join`, `test_auth_login_happy_and_sad` (not yet added).
+**Still open vs `suggested_sprint8_implementations.md` §2.5:** `test_items_crud_roundtrip`, `test_household_join`, `test_auth_login_happy_and_sad` (not yet added). Admin + food-search coverage: **`test_admin_and_food_search.py`** (**Creed**, 2026-04-26).
 
 **Not done in this slice (still optional per original sprint doc):** Step 6 “Compare prices” wiring to `/api/price-compare`, and any extra README feature-list edits beyond the dashboard tile.
 
 ## Not completed (still on the Sprint 8 plan)
 
-The following major themes from `suggested_sprint8_implementations.md` were **not** implemented in the same pass as the items above. Use that file as the source of truth for backlog:
+The following major themes from `suggested_sprint8_implementations.md` remain **open** or **partial** after the items above. Use that file as the source of truth for backlog:
 
-- **Tier 1.1 (remainder):** Admin route protection (`ADMIN_EMAILS`, `require_admin`), auth on `/api/food/search`, receipt scan-result ownership, bounded in-memory caches, signup `print()` cleanup in `api/src/main.py`, broader input validation caps on other endpoints, etc.
-- **Tier 2:** Receipt-scan refactor, notification-config UX, accessibility pass, additional backend endpoint tests (admin, pantry items CRUD, household join, auth — see §2.5 above), pinned `requirements.txt`, `.env.example`, `DEMO.md`, README updates, price-compare UI, and other polish items.
+- **Tier 1.1 (remainder):** Signup `print()` cleanup in `api/src/main.py`, broader input validation caps on other endpoints (e.g. recipes-by-ingredients query length, ZIP on price-compare) where not already enforced.
+- **Tier 2:** Receipt-scan refactor, notification-config UX, accessibility pass, remaining backend endpoint tests (pantry items CRUD, household join, auth — see §2.5 above), pinned `requirements.txt`, `.env.example`, `DEMO.md`, README updates, price-compare UI, and other polish items.
 
 ## Verification (completed items)
 
@@ -90,7 +108,9 @@ The following major themes from `suggested_sprint8_implementations.md` were **no
 - **Waste saved:** If `deleted_items` cannot be read, the API still returns zeros and the dashboard card stays usable without a 500-driven dev overlay from this path.
 - **Pantry:** Items missing expiration dates should eventually get suggested dates (background backfill); **View full pantry** opens a modal instead of relying on navigation for that action.
 - **Console:** Pantry list fetch and successful login error paths should not emit the removed `console.*` calls from the changed code paths.
-- **Tests:** From `api/`, `python -m pytest tests/test_shopping_list_crud.py -v` should pass with no `utcnow` deprecation warnings.
+- **Tests:** From `api/`, `python -m pytest tests/test_shopping_list_crud.py tests/test_admin_and_food_search.py -v` should pass with no `utcnow` deprecation warnings.
+- **Admin (Creed, 2026-04-26):** Without `Authorization`, `GET /api/admin/users` returns **401**. With a valid JWT whose `profiles.email` is not listed in `ADMIN_EMAILS`, returns **403**. With email allow-listed, returns **200** (live Supabase/httpx).
+- **Food search (Creed, 2026-04-26):** Without auth, `GET /api/food/search?query=milk` returns **401**. With auth, empty or over-200-char query returns **400**.
 
 ## Related documents
 
@@ -99,4 +119,4 @@ The following major themes from `suggested_sprint8_implementations.md` were **no
 
 ---
 
-*Last updated: 2026-04-28 — Added `test_shopping_list_crud.py`, timezone-aware UTC timestamps in `main.py`, and clarified remaining §2.5 tests.*
+*Last updated: 2026-04-26 — **Creed:** Tier 1.1 admin allow-list (`ADMIN_EMAILS`), secured `/api/food/search`, bounded `scan_sessions` / `_token_cache`, `test_admin_and_food_search.py`; sprint doc aligned (receipt scan-result ownership was already in code).*
