@@ -83,15 +83,17 @@ Sprint 8 was scoped in `suggested_sprint8_implementations.md`: shopping list fea
 | Full pantry modal | `components/DashboardHome.tsx` | **View full pantry →** opens a modal (`PantryListPanel` shared with the dashboard card) with taller scroll, Escape/backdrop close, footer actions for Scan/Add, delete confirm `z-index` above the modal, and closing the modal when opening Edit. |
 | Auto expiration backfill | `components/DashboardHome.tsx` | After `getItems`, any item **without** `expiration_date` is updated in the background via `suggest-expiration` + `updateItem` (rate-limited delays; optional second suggest when recommended storage differs), matching the spirit of Add/Edit modal suggestions. |
 
-### Tier 2.5 — Backend endpoint tests (partial)
+### Tier 2.5 — Backend endpoint tests (Creed, 2026-04-26)
 
 **Goal:** Regression tests for critical API behavior with Supabase mocked (per `api/tests/conftest.py`).
 
 | File | Change |
 |------|--------|
 | `api/tests/test_shopping_list_crud.py` | `GET/POST/PUT/DELETE` shopping-list routes plus `GET` **401** without `Authorization`; uses `TestClient`, `dependency_overrides` for `get_user_id`, and ordered `supabase.table` mocks. |
+| `api/tests/test_items_and_households.py` | **Creed:** Added `test_items_crud_roundtrip` for `POST/GET/PUT/DELETE /api/items` and `test_household_join` for `POST /api/households/join`, both with ordered Supabase table mocks. |
+| `api/tests/test_auth_login.py` | **Creed:** Added `test_auth_login_happy` and `test_auth_login_sad_invalid_credentials` for `/auth/login` token/user payload and 401 behavior. |
 
-**Still open vs `suggested_sprint8_implementations.md` §2.5:** `test_items_crud_roundtrip`, `test_household_join`, `test_auth_login_happy_and_sad` (not yet added). Admin + food-search coverage: **`test_admin_and_food_search.py`** (**Creed**, 2026-04-26).
+**Status:** All endpoint tests listed as open in `suggested_sprint8_implementations.md` §2.5 are now implemented: admin auth checks, items CRUD roundtrip, household join, shopping-list CRUD, and auth login happy/sad.
 
 **Not done in this slice (still optional per original sprint doc):** Step 6 “Compare prices” wiring to `/api/price-compare`, and any extra README feature-list edits beyond the dashboard tile.
 
@@ -100,7 +102,7 @@ Sprint 8 was scoped in `suggested_sprint8_implementations.md`: shopping list fea
 The following major themes from `suggested_sprint8_implementations.md` remain **open** or **partial** after the items above. Use that file as the source of truth for backlog:
 
 - **Tier 1.1 (remainder):** Broader input validation caps on other endpoints (e.g. recipes-by-ingredients query length, ZIP on price-compare) where not already enforced.
-- **Tier 2:** Receipt-scan refactor, notification-config UX, accessibility pass, remaining backend endpoint tests (pantry items CRUD, household join, auth — see §2.5 above), pinned `requirements.txt`, `.env.example`, `DEMO.md`, README updates, price-compare UI, and other polish items.
+- **Tier 2:** Receipt-scan refactor, notification-config UX, accessibility pass, pinned `requirements.txt`, `.env.example`, `DEMO.md`, README updates, price-compare UI, and other polish items.
 
 ## Verification (completed items)
 
@@ -110,7 +112,7 @@ The following major themes from `suggested_sprint8_implementations.md` remain **
 - **Waste saved:** If `deleted_items` cannot be read, the API still returns zeros and the dashboard card stays usable without a 500-driven dev overlay from this path.
 - **Pantry:** Items missing expiration dates should eventually get suggested dates (background backfill); **View full pantry** opens a modal instead of relying on navigation for that action.
 - **Console (Creed, 2026-04-26):** Pantry list fetch and successful login paths should not emit the removed `console.*` calls; `app/scan-receipt/page.tsx` no longer emits debug `console.log(...)` traces during URL detection/upload.
-- **Tests:** From `api/`, `python -m pytest tests/test_shopping_list_crud.py tests/test_admin_and_food_search.py -v` should pass with no `utcnow` deprecation warnings.
+- **Tests (Creed, 2026-04-26):** From `api/`, `python -m pytest tests/ -v` passes (43 tests), including the new files `test_items_and_households.py` and `test_auth_login.py`.
 - **Admin (Creed, 2026-04-26):** Without `Authorization`, `GET /api/admin/users` returns **401**. With a valid JWT whose `profiles.email` is not listed in `ADMIN_EMAILS`, returns **403**. With email allow-listed, returns **200** (live Supabase/httpx).
 - **Food search (Creed, 2026-04-26):** Without auth, `GET /api/food/search?query=milk` returns **401**. With auth, empty or over-200-char query returns **400**.
 
@@ -121,4 +123,4 @@ The following major themes from `suggested_sprint8_implementations.md` remain **
 
 ---
 
-*Last updated: 2026-04-26 — **Creed:** Tier 1.1 admin allow-list (`ADMIN_EMAILS`), secured `/api/food/search`, bounded `scan_sessions` / `_token_cache`, added `test_admin_and_food_search.py`, and completed logging cleanup (`api/src/main.py` signup debug prints + `app/scan-receipt/page.tsx` debug console logs).*
+*Last updated: 2026-04-26 — **Creed:** Tier 1.1 admin allow-list (`ADMIN_EMAILS`), secured `/api/food/search`, bounded `scan_sessions` / `_token_cache`, completed logging cleanup (`api/src/main.py` signup debug prints + `app/scan-receipt/page.tsx` debug console logs), and finished remaining backend endpoint tests (`test_items_and_households.py`, `test_auth_login.py`).*
