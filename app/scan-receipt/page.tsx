@@ -3,7 +3,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState, useRef, useEffect } from "react";
+import { Suspense, useState, useRef, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 // Get API base URL dynamically - use the same host as the current page but port 8000
@@ -28,7 +28,7 @@ const getApiBaseUrl = () => {
   return process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 };
 
-export default function ScanReceiptPage() {
+function ScanReceiptPageContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -349,3 +349,16 @@ export default function ScanReceiptPage() {
   );
 }
 
+export default function ScanReceiptPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <p className="text-slate-600">Loading…</p>
+        </div>
+      }
+    >
+      <ScanReceiptPageContent />
+    </Suspense>
+  );
+}
