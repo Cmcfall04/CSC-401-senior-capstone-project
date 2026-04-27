@@ -61,11 +61,43 @@ export async function POST(req: NextRequest) {
       throw networkError ?? new Error("Unable to reach auth backend");
     }
 
-    const data = await backendRes.json();
-    return NextResponse.json(data, { status: backendRes.status });
-  } catch {
+    const raw = await backendRes.text();
+    let data: Record<string, unknown> = {};
+
+    try {
+      data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    } catch {
+      if (!backendRes.ok) {
+        data = {
+          detail: `Backend returned ${backendRes.status} ${backendRes.statusText}`,
+          backend_body: raw.slice(0, 300),
+        };
+      }
+    }
+
+    if (backendRes.ok) {
+      return NextResponse.json(data, { status: backendRes.status });
+    }
+
+    const detail =
+      typeof data.detail === "string" && data.detail.trim()
+        ? data.detail
+        : `Backend returned ${backendRes.status} ${backendRes.statusText}`;
+
     return NextResponse.json(
-      { detail: "An internal error occurred. Please try again." },
+      {
+        ...data,
+        detail,
+        backend_status: backendRes.status,
+      },
+      { status: backendRes.status }
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        detail: "An internal error occurred. Please try again.",
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 }
     );
   }
