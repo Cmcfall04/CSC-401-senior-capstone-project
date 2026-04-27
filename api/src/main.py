@@ -270,8 +270,14 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 # CORS configuration
+# Browsers send Origin without a trailing slash; CORSMiddleware matches literally,
+# so strip trailing slashes on each configured origin to avoid silent CORS failures.
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
-allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+allowed_origins = [
+    origin.strip().rstrip("/")
+    for origin in allowed_origins_env.split(",")
+    if origin.strip()
+]
 
 # For development, also allow common localhost ports and local network IPs
 if os.getenv("NODE_ENV", "development") == "development":
