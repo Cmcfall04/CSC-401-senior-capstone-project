@@ -84,6 +84,7 @@ class SignupRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str
+    redirect_to: Optional[str] = None
 
 class ItemCreate(BaseModel):
     name: str
@@ -739,13 +740,15 @@ def forgot_password(req: ForgotPasswordRequest, request: Request):
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
 
-    frontend_url = (
-        _frontend_base_from_request(request)
-        or os.getenv("NEXT_PUBLIC_FRONTEND_URL")
-        or os.getenv("FRONTEND_URL")
-        or "http://localhost:3000"
-    )
-    redirect_to = f"{frontend_url.rstrip('/')}/reset-password"
+    redirect_to = (req.redirect_to or "").strip()
+    if not redirect_to:
+        frontend_url = (
+            _frontend_base_from_request(request)
+            or os.getenv("NEXT_PUBLIC_FRONTEND_URL")
+            or os.getenv("FRONTEND_URL")
+            or "http://localhost:3000"
+        )
+        redirect_to = f"{frontend_url.rstrip('/')}/reset-password"
 
     try:
         supabase.auth.reset_password_for_email(
