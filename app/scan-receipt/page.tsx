@@ -3,21 +3,24 @@
 
 export const dynamic = "force-dynamic";
 
-import { Suspense, useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 // Get API base URL dynamically - use the same host as the current page but port 8000
 const getApiBaseUrl = () => {
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
+    console.log('Detected hostname:', hostname);
     
     // If using IP address (not localhost), use same IP for API
     if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
       // Make sure we have a complete IP address (4 parts)
       const ipParts = hostname.split('.');
+      console.log('IP parts:', ipParts);
       
       if (ipParts.length === 4) {
         const apiUrl = `http://${hostname}:8000`;
+        console.log('Using API URL:', apiUrl);
         return apiUrl;
       } else {
         console.warn('Incomplete IP address detected:', hostname);
@@ -28,7 +31,7 @@ const getApiBaseUrl = () => {
   return process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 };
 
-function ScanReceiptPageContent() {
+export default function ScanReceiptPage() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -42,13 +45,19 @@ function ScanReceiptPageContent() {
   // Get API URL dynamically when component mounts
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
       const url = getApiBaseUrl();
       setApiBaseUrl(url);
+      console.log('Current hostname:', hostname);
+      console.log('API Base URL set to:', url);
+      console.log('Full URL:', window.location.href);
       
       // Test if backend is accessible
       fetch(`${url}/health`)
         .then(res => res.json())
-        .then(() => {})
+        .then(data => {
+          console.log('Backend health check successful:', data);
+        })
         .catch(err => {
           console.error('Backend health check failed:', err);
           setUploadStatus(`Warning: Cannot reach backend at ${url}. Make sure it's running and accessible.`);
@@ -169,12 +178,20 @@ function ScanReceiptPageContent() {
       // Use the state variable which is set on mount, or get it fresh
       const currentApiUrl = apiBaseUrl || getApiBaseUrl();
       const uploadUrl = `${currentApiUrl}/api/receipt/scan-mobile?token=${token}`;
+      console.log('Uploading to:', uploadUrl);
+      console.log('API Base URL:', currentApiUrl);
+      console.log('File size:', file.size, 'bytes');
+      console.log('Current hostname:', typeof window !== 'undefined' ? window.location.hostname : 'N/A');
+      console.log('Full location:', typeof window !== 'undefined' ? window.location.href : 'N/A');
       
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
         body: formData,
         // Don't set Content-Type header - let browser set it with boundary for FormData
       });
+
+      console.log('Upload response status:', uploadResponse.status);
+      console.log('Upload response headers:', Object.fromEntries(uploadResponse.headers.entries()));
 
       if (!uploadResponse.ok) {
         let errorText = 'Unknown error';
@@ -207,7 +224,8 @@ function ScanReceiptPageContent() {
         }
       }
 
-      await uploadResponse.json();
+      const data = await uploadResponse.json();
+      console.log('Upload successful:', data);
       setUploadStatus('Receipt uploaded successfully! You can close this page.');
       
       // Clear photo after successful upload
@@ -349,16 +367,3 @@ function ScanReceiptPageContent() {
   );
 }
 
-export default function ScanReceiptPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-          <p className="text-slate-600">Loading…</p>
-        </div>
-      }
-    >
-      <ScanReceiptPageContent />
-    </Suspense>
-  );
-}

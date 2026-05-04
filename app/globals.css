@@ -6,7 +6,7 @@
 @tailwind utilities;
 
 :root {
-  --bg: #f8fafc;
+  --bg: white;
 }
 
 html, body {
