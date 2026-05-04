@@ -1,0 +1,81 @@
+Final Project Presentation Checklist
+At the conclusion of your project, your team will (formally) present at a Senior Capstone “Conference” that is
+attended by various stakeholders of the Computer Science Program. Stakeholders include the program's Industry
+Advisory Board members, faculty, students, alumni, and other industry representatives.
+Use this checklist to ensure your presentation is complete, professional, and aligned with expectations. Your
+presentation should be 10-15 minutes and include a short live or recorded demo of your project.
+Your presentation should tell a coherent story (problem approach results impact).→ → → Ensure that the
+audience can clearly articulate what your project does and why it matters by the end of your
+presentation.
+Problem and Goals
+• Clearly describe the problem or need your project addresses. Be specific! Avoid vague or generic
+problems.
+• Explain the real-world context (who benefits? what's at stake?).
+• Identify key constraints, requirements, or challenges. Include a brief reflection on your proudest successes
+and most significant challenges, highlighting a few that you overcame.
+Solution Design and Implementation
+• Describe your overall solution and system architecture.
+• Highlight major technical components and how they work together.
+• Justify key design decisions (e.g., why this approach vs. alternatives?).
+• Briefly explain your development process or methodology.
+• Describe how you tested or evaluated your system.
+• Acknowledge any known limitations or areas for future work.
+• Include any relevant design or fabrication aspects (e.g., use of the Makerspace). If your project includes a
+significant hardware component, discuss it along with the software component.
+• Clearly communicate the results or outcomes of your project (what worked, how well did it perform, etc).
+Revised: 2026-04-28 1
+Senior Capstone
+Communication and Professionalism
+• Dress in professional or business casual attire appropriate for a public presentation. Arrive early,
+prepared, and focused.
+• Maintain professional demeanor. Be respectful, engaged, and attentive throughout the presentation.
+• At the beginning of your presentation, introduce yourselves and the project (title/description).
+• Present in a clear, well-organized, and professional manner. Speak audibly and at a reasonable pace.
+Minimize filler words (“um,” “like”) and avoid reading directly from slides.
+• Use visuals/slides that are clean, readable, and purposeful.
+• Respond to questions thoughtfully and respectfully.
+• Present for a mixed audience (both technical and non-technical stakeholders).
+Ethics, Legal, and Societal Considerations
+• Identify any ethical, legal, or security-related concerns in your project.
+• Address user privacy, accessibility, or data security, if relevant.
+• Consider your project's impact on individuals, organizations, or society.
+Team Collaboration
+• Ensure each team member presents and explains part of the work.
+• Explain how your team divided tasks and responsibilities.
+• Reflect briefly on teamwork successes or challenges.
+Technical Depth
+• Demonstrate appropriate technical knowledge during explanations.
+• Use accurate terminology and show understanding of CS concepts.
+• Reference relevant theories, data structures, algorithms, or tools (basically, bring in things you learned
+throughout the CS curriculum).
+Demo and Visuals
+• Include a title slide with project name and team members.
+Revised: 2026-04-28 2
+Senior Capstone
+• Avoid using a lot of text on slides. Images are better. Practice what you intend to say, and use images as a
+trigger for that.
+• Include a live or recorded demonstration of your system. Ensure the demo highlights core features or user
+experience.
+• Narrate the demo. Explain what the audience is seeing and why it matters.
+• Focus on the most important aspects of your project. Don't try to show everything.
+• Test your demo setup in advance to avoid technical issues.
+• Back up your demo with screenshots or a contingency plan just in case.
+• Use an emulator to showcase mobile apps and/or provide a QR code that the audience can use to
+download your app.
+Timing and Transitions
+• Practice to ensure your presentation fits in 10-15 minutes. This is important! I will stop your
+presentation (“pull the plug”) and transition to another group after 15 minutes (which includes some time
+for Q&A).
+• Use smooth transitions between speakers.
+Optional: Supporting Materials
+• Provide a QR code or link to your GitHub repo or documentation.
+• Acknowledge any external tools, APIs, or libraries used. Include limitations (e.g., query limits, etc). Include
+AI tools as well.
+• Make sure that your GitHub repo is updated, organized (e.g., don't put everything in the top-level folder),
+etc. Including all phase documents (requirements, design, sprints, etc) and presentations is strongly
+recommended.
+• Ensure that your Trello boards are also updated and well-organized.
+• Anticipate likely questions and prepare responses in advance.
+Deliverables
+Submit a PDF of your slides.
+Revised: 2026-04-28 3
