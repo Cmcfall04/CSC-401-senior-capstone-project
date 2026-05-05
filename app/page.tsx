@@ -79,7 +79,7 @@ function MarketingHome() {
           About Us
         </h2>
         <div 
-          className="mx-auto max-w-3xl shadow-lg rounded-2xl p-8 text-gray-300 text-center bg-brand-card border border-green-900/30"
+          className="mx-auto max-w-3xl shadow-lg rounded-2xl p-8 text-center bg-brand-card border border-green-900/30 text-slate-700 leading-relaxed"
         >
           Smart Pantry is designed to make everyday food management simpler, smarter, and more sustainable. Our mission is to help households reduce food waste, save money, and enjoy fresher meals by combining technology with practical kitchen habits. With barcode scanning, AI-driven freshness predictions, and recipe recommendations, Smart Pantry keeps you connected to what&apos;s in your kitchen without the guesswork.
         </div>
@@ -111,7 +111,7 @@ function MarketingHome() {
           <div className="flex flex-col items-center">
             <div className="bg-brand-card rounded-2xl p-6 shadow-lg w-full h-full flex flex-col border border-gray-800">
               <h3 className="font-semibold mb-3 text-xl text-brand-text">✨ Smart Scanning</h3>
-              <p className="text-gray-400 text-base flex-grow">
+              <p className="text-slate-700 text-base leading-relaxed flex-grow">
                 Quickly add groceries to your pantry with AI-powered barcode scanning and receipt OCR. Just snap a photo or scan an item, and Smart Pantry automatically identifies the product, category, and quantity, saving you time and avoiding manual entry.
               </p>
             </div>
@@ -128,7 +128,7 @@ function MarketingHome() {
           <div className="flex flex-col items-center">
             <div className="bg-brand-card rounded-2xl p-6 shadow-lg w-full h-full flex flex-col border border-gray-800">
               <h3 className="font-semibold mb-3 text-xl text-brand-text">🥬 Freshness Alerts</h3>
-              <p className="text-gray-400 text-base flex-grow">
+              <p className="text-slate-700 text-base leading-relaxed flex-grow">
                 Stay one step ahead of food waste with timely reminders before items expire. Our freshness tracker predicts shelf life based on item type and purchase date, then alerts you so you can use ingredients while they&apos;re still at their best.
               </p>
             </div>
@@ -145,7 +145,7 @@ function MarketingHome() {
           <div className="flex flex-col items-center">
             <div className="bg-brand-card rounded-2xl p-6 shadow-lg w-full h-full flex flex-col border border-gray-800">
               <h3 className="font-semibold mb-3 text-xl text-brand-text">🧑‍🍳 Recipe Magic</h3>
-              <p className="text-gray-400 text-base flex-grow">
+              <p className="text-slate-700 text-base leading-relaxed flex-grow">
                 Turn what&apos;s in your kitchen into delicious meals with personalized recipe suggestions. Filter by dietary needs or preferences, and discover creative ways to combine ingredients you already have, reducing waste and making cooking easier.
               </p>
             </div>
